@@ -1,0 +1,64 @@
+[project]
+name = "kernelsmith"
+version = "0.1.0"
+description = "An in-process Google ADK agent tree that generates, verifies, and hot-swaps Triton GPU kernels into a live Qwen2.5-1.5B inference server."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Kaustubh", email = "kaustubhme0@gmail.com" }]
+
+# All versions pinned exactly per spec Section 0 (VERIFIED August 2026).
+# Do not float these — the verifier, monkey-patch targets, and Vertex model IDs
+# are all validated against these exact releases.
+dependencies = [
+    # --- Agents (ADK, in-process only) ---
+    "google-adk==2.7.1",
+    # --- GCP: Firestore memory + Gemini/embeddings ---
+    "google-cloud-firestore==2.28.1",
+    "google-genai==2.19.0",
+    # --- GPU stack: torch 2.12.1 pins triton==3.7.1 on Linux (spec S0) ---
+    "torch==2.12.1",
+    "triton==3.7.1",
+    "transformers==4.57.6",
+    # --- Inference server ---
+    "fastapi==0.141.1",
+    "uvicorn[standard]==0.52.4",
+    # --- Dashboard ---
+    "streamlit==1.62.0",
+    # --- Structured boundaries ---
+    "pydantic==2.13.4",
+    "numpy==2.4.6",  # latest numpy that still supports Python 3.11 (DLVM ships 3.11)
+]
+
+[dependency-groups]
+dev = [
+    "pytest==9.1.1",
+    "pytest-asyncio==1.4.0",
+    "ruff==0.16.4",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["kernelsmith"]
+
+[tool.uv]
+# torch/triton wheels are Linux-only; the target is a g2-standard-4 (NVIDIA L4).
+package = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+    "integration: requires GPU and live Vertex AI / Firestore",
+    "chaos: fault-injection tests (subprocess kills, OOM, rate limits)",
+]
