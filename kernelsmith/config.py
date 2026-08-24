@@ -45,6 +45,15 @@ L4_MEM_BW_GBPS = 300.1  # GB/s, GDDR6
 L4_FP16_TFLOPS = 30.3  # Non-tensor FP16
 L4_TENSOR_FP16_TFLOPS = 121.0  # Tensor Core FP16
 L4_VRAM_GB = 24
+L4_SM_COUNT = 58  # AD104: 58 streaming multiprocessors
+L4_SRAM_KB_PER_SM = 48  # Usable shared memory per SM; a Triton tile must fit inside it
+
+# --- Profiler heuristics (roofline fingerprint, spec 7) ---
+PROFILER_MIN_TILE = 64  # Below one warp-row of fp16 there is nothing left to coalesce
+PROFILER_MAX_TILE = 1024  # 1024 fp16 lanes = 2 KB/row; wider tiles spill registers on the L4
+PROFILER_BLOCKS_PER_SM = 4  # Target resident blocks per SM for the occupancy heuristic
+PROFILER_FALLBACK_AI = 0.5  # Fallback arithmetic intensity when profiling fails: memory-bound
+PROFILER_FALLBACK_OCCUPANCY = 0.5  # Fallback occupancy, deliberately uninformative
 
 # --- Reproducibility ---
 GLOBAL_SEED = 42
