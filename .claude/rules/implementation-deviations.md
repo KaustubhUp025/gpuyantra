@@ -271,3 +271,39 @@ return_mode="median"`. The documented default `warmup=25` underestimates by
 ~30%. `bench_kernel()` enforces `warmup >= 150` and raises if violated.
 
 *Source: Spec §5.2, verified in Task 2.*
+
+---
+
+## `streamlit-autorefresh` added to the pinned stack (adds to §0, implements §10.2)
+
+Pinned at `streamlit-autorefresh==1.0.1`, resolved clean against `streamlit==1.62.0`.
+Spec §10.2 leaves the refresh mechanism open ("`st_autorefresh` or `st.empty()` with a
+polling loop"); the component reruns the *whole* script, which is what the dashboard
+needs — `st.fragment(run_every=…)` reruns only its own fragment, so the agent panels
+and the banner would freeze while the throughput metric ticked.
+
+It is a 2021 custom component, so the import is guarded: `render_autorefresh()` falls
+back to a manual "🔄 Refresh" button and a warning if the import or the component call
+raises. The dashboard is fully usable on the fallback path.
+
+*Source: Task 6, Claude Code decision.*
+
+---
+
+## Dashboard drives the two-message Supervisor flow automatically (implements §10.1)
+
+The two-turn protocol above is real but must not be the operator's problem on demo day.
+`streamlit_app.py`'s `drive_run()` watches `EventStreamConsumer.runs_completed` and
+fires the follow-up message itself once turn 1 goes idle. One button press therefore
+runs profile → loop → upsert → hot-swap → summary.
+
+`EventStreamConsumer.start_run()` refuses overlapping runs (returns `False`) precisely
+because the dashboard refreshes at 1 Hz: without that guard, a tick landing during a
+run would launch a second Supervisor over the same session.
+
+The latency chart inserts a `None` sample at each swap boundary rather than joining
+across it, because `TokenMeter` clears its rolling window on swap — the two sides
+describe different kernels, and a continuous line would smooth over the discontinuity
+the demo is claiming.
+
+*Source: Task 6, Claude Code decision.*

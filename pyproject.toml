@@ -25,6 +25,7 @@ dependencies = [
     "httpx==0.28.1",  # hotswap_tool -> POST /swap, and fastapi's TestClient
     # --- Dashboard ---
     "streamlit==1.62.0",
+    "streamlit-autorefresh==1.0.1",  # 1 Hz whole-script rerun; the UI falls back to a button
     # --- Structured boundaries ---
     "pydantic==2.13.4",
     "numpy==2.4.6",  # latest numpy that still supports Python 3.11 (DLVM ships 3.11)

@@ -158,6 +158,16 @@ def update_run(run_id: str, fields: dict[str, Any], db: firestore.Client | None 
     runs_collection(db).document(run_id).update(fields)
 
 
+def list_runs(limit: int = 20, db: firestore.Client | None = None) -> list[RunRecord]:
+    """Most recent runs first — the dashboard's run-history table (spec 10.1)."""
+    query = (
+        runs_collection(db)
+        .order_by("started_at", direction=firestore.Query.DESCENDING)
+        .limit(limit)
+    )
+    return [RunRecord(**doc.to_dict()) for doc in query.stream()]
+
+
 def append_trace(run_id: str, rec: TraceRecord, db: firestore.Client | None = None) -> str:
     _, ref = traces_collection(run_id, db).add(rec.model_dump())
     return ref.id
