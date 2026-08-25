@@ -22,6 +22,7 @@ dependencies = [
     # --- Inference server ---
     "fastapi==0.141.1",
     "uvicorn[standard]==0.52.4",
+    "httpx==0.28.1",  # hotswap_tool -> POST /swap, and fastapi's TestClient
     # --- Dashboard ---
     "streamlit==1.62.0",
     # --- Structured boundaries ---

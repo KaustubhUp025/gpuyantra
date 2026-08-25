@@ -215,12 +215,17 @@ def record_verdict(callback_context: CallbackContext) -> None:
         best_reward = _NO_BEST
 
     if verdict.reward > best_reward:
-        code = str(as_dict(state, "kernel_draft").get("code", ""))
+        draft = as_dict(state, "kernel_draft")
+        code = str(draft.get("code", ""))
+        entrypoint = str(draft.get("entrypoint", ""))
         state["best_reward"] = verdict.reward
         if code:
             state["best_kernel"] = code
         # Not in the spec 4.1 table, but the Supervisor needs the winning iteration's
-        # speedups to build a SkillRecord, and `verdict` is overwritten every loop.
+        # speedups to build a SkillRecord and its entrypoint name to hot-swap it, and
+        # both `verdict` and `kernel_draft` are overwritten every loop.
+        if entrypoint:
+            state["best_entrypoint"] = entrypoint
         state["best_verdict"] = verdict.model_dump()
 
     return None

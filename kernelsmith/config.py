@@ -39,6 +39,9 @@ RETRIEVAL_TOP_K = 3
 SERVED_MODEL = "Qwen/Qwen2.5-1.5B-Instruct"
 INFERENCE_HOST = "127.0.0.1"
 INFERENCE_PORT = 8000
+HOTSWAP_TIMEOUT_S = 120  # /swap parity-checks against the live model before it answers
+SWAP_PARITY_SHAPE = (1, 128)  # (batch, seq) probe shape for the pre-swap parity gate
+GPU_PROBE_TIMEOUT_S = 5  # nvidia-smi behind /health; a wedged GPU must not hang the API
 
 # --- Hardware (NVIDIA L4 constants) ---
 L4_MEM_BW_GBPS = 300.1  # GB/s, GDDR6
