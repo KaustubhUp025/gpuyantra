@@ -5,5 +5,6 @@ __pycache__/
 .ruff_cache/
 dist/
 *.egg-info/
-.claude/
+.claude/settings.local.json
+.claude/*.local.json
 .venv/
