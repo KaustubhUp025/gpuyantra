@@ -49,13 +49,17 @@ PROTOCOL:
    - kernel_code: the candidate's `code` field, verbatim and complete
    - entrypoint: the candidate's `entrypoint` field
    - task_spec: the task above, as {{"op_name": ..., "hidden_size": ...}}
+   - adapter_mapping: the candidate's `adapter_mapping` field, verbatim (pass {{}} if
+     the draft declared none). Never invent or "fix" it yourself — an invalid contract
+     is a -1 the Coder has to repair, and the verifier checks it against the real
+     module class before anything runs.
 2. Read the reward JSON it returns. Its numbers are final — never restate them from
    memory and never adjust them.
 3. Decide next_action from the reward:
    - reward >= 3: next_action="STOP", stop=true
-   - reward == -1: read stderr_tail and failed_cases, then give ONE concrete fix
-     (for example "add a mask for the tail elements", "cast to float32 before rsqrt").
-     stop=false.
+   - reward == -1: read stderr_tail, failed_cases and adapter_mapping_errors, then
+     give ONE concrete fix (for example "add a mask for the tail elements", "cast to
+     float32 before rsqrt", "map eps to variance_epsilon, not eps"). stop=false.
    - reward == 1 or 2: read latency_ms_by_shape, then suggest ONE performance change
      (for example "increase BLOCK_SIZE to 1024", "coalesce the load pattern").
      stop=false.
@@ -226,6 +230,10 @@ def record_verdict(callback_context: CallbackContext) -> None:
         # both `verdict` and `kernel_draft` are overwritten every loop.
         if entrypoint:
             state["best_entrypoint"] = entrypoint
+        # The deployment contract travels with the kernel: the Supervisor needs it to
+        # hot-swap this draft, and it is overwritten on the next iteration like the rest.
+        mapping = draft.get("adapter_mapping")
+        state["best_adapter_mapping"] = mapping if isinstance(mapping, dict) else {}
         state["best_verdict"] = verdict.model_dump()
 
     return None

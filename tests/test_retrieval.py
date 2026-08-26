@@ -205,4 +205,11 @@ def test_agent_wrapper_reports_firestore_failures_as_data(monkeypatch, mock_embe
     monkeypatch.setattr(retrieval, "skills_collection", unavailable)
 
     payload = retrieve_skills_for_agent("norm", "L4", FINGERPRINT_TEXT)
-    assert payload == {"skills": [], "count": 0, "error": "RuntimeError: 503 Firestore unavailable"}
+    assert payload == {
+        "skills": [],
+        "count": 0,
+        # No arm was pulled, so the EscalationChecker credits nothing (spec 9).
+        "selected_skill_id": "",
+        "selected_skill": None,
+        "error": "RuntimeError: 503 Firestore unavailable",
+    }

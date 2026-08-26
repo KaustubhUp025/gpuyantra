@@ -3,15 +3,18 @@
 This is the process the demo points at: a real Qwen2.5-1.5B answering real requests,
 whose RMSNorm gets replaced under it, mid-flight, by a kernel the agent tree wrote.
 
-Three things make that safe rather than reckless:
+Four things make that safe rather than reckless:
 
-1. **One lock.** `/generate` and `/swap` share `_SWAP_LOCK`, so a patch can never land
+1. **The declared contract is re-checked.** `/swap` is an HTTP endpoint, so a kernel
+   can arrive here without having passed the verifier. Its `adapter_mapping` is
+   re-validated against the real module class before anything is bound.
+2. **One lock.** `/generate` and `/swap` share `_SWAP_LOCK`, so a patch can never land
    between two decode steps of an in-flight request.
-2. **A parity gate.** After patching, and before the swap is reported as successful,
+3. **A parity gate.** After patching, and before the swap is reported as successful,
    the new forward is compared against the saved original over 5 seeds at
    atol=rtol=1e-2. A single mismatch auto-rolls-back and the swap is refused. This is
    spec 13.4: no op is served to a user until a torch reference agrees with it.
-3. **The static checker.** The same AST rules the verifier uses run again here, so a
+4. **The static checker.** The same AST rules the verifier uses run again here, so a
    kernel that never went through the verifier cannot reach `exec` by calling `/swap`
    directly.
 
@@ -51,6 +54,7 @@ from kernelsmith.inference_server.patchable_ops import (
     rollback_op,
     swap_op,
 )
+from kernelsmith.verifier.adapter_mapping import validate_adapter_mapping
 from kernelsmith.verifier.static_checker import check_static
 
 #: Guards every mutation of the live model AND every generation against it. One lock,
@@ -102,6 +106,9 @@ class SwapRequest(BaseModel):
     op_name: str
     kernel_source: str
     entrypoint: str
+    #: The Coder's declared deployment contract (kernel param -> module attribute).
+    #: Empty falls back to the hard-coded per-op adapter, which is what seed kernels use.
+    adapter_mapping: dict[str, str] = Field(default_factory=dict)
 
 
 class RollbackRequest(BaseModel):
@@ -170,6 +177,7 @@ async def swap(request: SwapRequest) -> dict[str, Any]:
             request.kernel_source,
             request.entrypoint,
             STATE.originals.get(_op_key(request.op_name)),
+            request.adapter_mapping,
         )
         if result["success"]:
             # setdefault, never assign: on a second swap of the same op the handles we
@@ -229,6 +237,7 @@ def apply_swap(
     kernel_source: str,
     entrypoint: str,
     baseline: dict[str, Callable] | None = None,
+    adapter_mapping: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Patch `op_name` with `entrypoint` from `kernel_source`, keeping it only if parity holds.
 
@@ -243,6 +252,9 @@ def apply_swap(
         baseline: The TRUE original forwards, when an earlier swap for this op is
             already live. Parity is always measured against these, never against a
             previously swapped-in kernel.
+        adapter_mapping: The verified deployment contract. Re-validated here — /swap is
+            reachable without going through the verifier — and then used to build the
+            generic adapter. Empty means the hard-coded per-op adapter.
 
     Returns:
         On success: {"success": True, "originals": {...}, "modules_patched": int,
@@ -259,8 +271,14 @@ def apply_swap(
         detail = "; ".join(f"rule {rule} (line {line}): {desc}" for rule, line, desc in violations)
         return _refused(op_name, f"static checker rejected the kernel: {detail}")
 
+    mapping_errors = validate_adapter_mapping(op_name, adapter_mapping)
+    if mapping_errors:
+        return _refused(op_name, "invalid adapter_mapping: " + "; ".join(mapping_errors))
+
     try:
-        new_forward = build_forward(op_name, _load_entrypoint(kernel_source, entrypoint))
+        new_forward = build_forward(
+            op_name, _load_entrypoint(kernel_source, entrypoint), adapter_mapping
+        )
     except Exception as exc:  # noqa: BLE001 — bad kernel source is data, not an outage
         return _refused(op_name, f"could not load entrypoint {entrypoint!r}: {exc}")
 

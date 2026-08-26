@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import inspect
 import types
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 #: Swappable ops, in the order the demo attempts them. `class_name` is matched as a
@@ -100,6 +100,12 @@ def find_modules(model: Any, op_class_name: str) -> list[tuple[str, Any]]:
 # Verified kernel -> bindable forward
 # --------------------------------------------------------------------------- #
 #
+# Two ways to close the gap below. The hard-coded adapters here are the fallback, kept
+# for seed kernels; the generic path is `build_forward_from_mapping`, which uses the
+# contract the CODER declared and the verifier validated (see
+# `verifier/adapter_mapping.py`). Any new hard-coded op needs its own adapter; an op
+# with a declared mapping needs nothing.
+#
 # The verifier calls a kernel wrapper with explicit weights — `entry(x, weight, eps)`
 # for rmsnorm (see `OpBinding.bind` in tools/profiler_tool.py) — because the sandbox
 # has no model to read them from. The live model does. These adapters close that gap:
@@ -135,16 +141,69 @@ _ADAPTERS: dict[str, Callable[[Callable], Callable]] = {
 }
 
 
-def build_forward(op_name: str, entrypoint_fn: Callable) -> Callable:
+def build_forward_from_mapping(
+    kernel_entry_fn: Callable,
+    adapter_mapping: Mapping[str, str],
+) -> Callable:
+    """The GENERIC adapter: bind a kernel using the contract the Coder declared.
+
+    `adapter_mapping` maps kernel parameter names to module attribute names —
+    `{"weight": "weight", "eps": "variance_epsilon"}` — and the forward's input tensor
+    is implicit, passed positionally, never mapped. So the returned forward calls
+    `kernel_entry_fn(hidden_states, weight=self.weight, eps=self.variance_epsilon)`.
+
+    This is what makes an op the system has never seen deployable without a human
+    writing an adapter for it. It is only ever called on a mapping that
+    `validate_adapter_mapping` has already accepted (an attribute that exists, and is
+    data rather than a method), so the lookups here are resolved eagerly per call
+    against the live module — the weights stay the module's own, nothing is copied.
+
+    Args:
+        kernel_entry_fn: The verified wrapper, taking the input tensor first.
+        adapter_mapping: kernel parameter -> module attribute. Dotted paths are walked.
+
+    Returns:
+        `forward(self, hidden_states)`, ready for `types.MethodType` via `swap_op`.
+    """
+    mapping = {str(k): str(v) for k, v in dict(adapter_mapping).items()}
+
+    def forward(self, hidden_states, *args, **kwargs):  # noqa: ANN001 — bound as a method
+        del args, kwargs
+        return kernel_entry_fn(
+            hidden_states, **{param: _resolve_attr(self, attr) for param, attr in mapping.items()}
+        )
+
+    return forward
+
+
+def _resolve_attr(module: Any, dotted: str) -> Any:
+    """Walk a dotted attribute path on the live module. Raises AttributeError if absent."""
+    value = module
+    for part in dotted.split("."):
+        value = getattr(value, part)
+    return value
+
+
+def build_forward(
+    op_name: str,
+    entrypoint_fn: Callable,
+    adapter_mapping: Mapping[str, str] | None = None,
+) -> Callable:
     """Turn a verified kernel wrapper into a `forward(self, x)` ready for `swap_op`.
 
-    A wrapper whose first parameter is `self` is already a forward and is used as-is —
-    that is the path for a Coder that writes the method directly. Anything else goes
-    through the op's adapter, which supplies the module's own weights.
+    Three paths, in order of precedence:
+
+    1. A wrapper whose first parameter is `self` is already a forward and is used
+       as-is — the path for a Coder that writes the method directly.
+    2. A declared, validated `adapter_mapping` goes through the generic adapter above.
+       This is the path that works for ops nobody hard-coded an adapter for.
+    3. Otherwise the op's hard-coded adapter, kept as the fallback for seed kernels
+       written before `adapter_mapping` existed.
 
     Raises:
         KeyError: unknown op name.
-        ValueError: the op has no adapter (e.g. "rope", a module-level function).
+        ValueError: no mapping was declared and the op has no hard-coded adapter
+            (e.g. "rope", a module-level function with no module to bind to).
     """
     resolve_class_name(op_name)  # raises KeyError for an unknown op
     key = op_name.strip().lower()
@@ -152,11 +211,15 @@ def build_forward(op_name: str, entrypoint_fn: Callable) -> Callable:
     if _takes_self(entrypoint_fn):
         return entrypoint_fn
 
+    if adapter_mapping:
+        return build_forward_from_mapping(entrypoint_fn, adapter_mapping)
+
     adapter = _ADAPTERS.get(key)
     if adapter is None:
         raise ValueError(
-            f"op {key!r} has no forward adapter: it is not bound to a module "
-            "(patch it at module scope, or give the entrypoint a `self` first argument)"
+            f"op {key!r} has no forward adapter and no adapter_mapping was declared: it "
+            "is not bound to a module (patch it at module scope, declare an "
+            "adapter_mapping, or give the entrypoint a `self` first argument)"
         )
     return adapter(entrypoint_fn)
 

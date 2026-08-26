@@ -5,12 +5,16 @@ executes candidate code in this process (red line #2): the candidate is written 
 throwaway file, a generated runner script is written beside it, and
 `sandbox.run_in_sandbox` spawns both in a scrubbed subprocess with a hard timeout.
 
-Three defences, in order:
+Four defences, in order of cost:
   1. `static_checker.check_static` — purely syntactic, costs nothing, cannot be fooled
      by runtime behaviour. Any violation is -1 with no execution at all.
-  2. `correctness.check_correctness` — 5 seeds x 3 shapes at atol=rtol=1e-2, inside
+  2. `adapter_mapping.validate_adapter_mapping` — deterministic `hasattr` check of the
+     deployment contract the Coder declared, against the real module class. Also -1
+     with no execution: a mapping naming an attribute that does not exist would fail
+     inside a hot forward on a live server, and that is far too late to find out.
+  3. `correctness.check_correctness` — 5 seeds x 3 shapes at atol=rtol=1e-2, inside
      the sandbox. Timing is only measured after all 15 checks pass.
-  3. `reward.compute_reward` — recomputed HERE from the parsed numbers. Whatever the
+  4. `reward.compute_reward` — recomputed HERE from the parsed numbers. Whatever the
      subprocess printed as its own `reward` is never trusted: the candidate controls
      that stdout.
 """
@@ -25,6 +29,7 @@ from typing import Any
 from google.adk.tools import FunctionTool
 
 from kernelsmith.config import GCP_PROJECT, SANDBOX_TIMEOUT_S
+from kernelsmith.verifier.adapter_mapping import validate_adapter_mapping
 from kernelsmith.verifier.reward import compute_reward
 from kernelsmith.verifier.sandbox import SANDBOX_DIR, run_in_sandbox
 from kernelsmith.verifier.static_checker import check_static
@@ -150,12 +155,18 @@ print(json.dumps(payload))
 '''
 
 
-def verify_kernel(kernel_code: str, entrypoint: str, task_spec: dict) -> dict:
-    """Verify a generated Triton kernel: correctness first, then speed.
+def verify_kernel(
+    kernel_code: str,
+    entrypoint: str,
+    task_spec: dict,
+    adapter_mapping: dict | None = None,
+) -> dict:
+    """Verify a generated Triton kernel: contract first, then correctness, then speed.
 
-    Runs the static reward-hack checker, then executes the kernel in an isolated
-    subprocess against the reference op named by the task spec — 5 seeds x 3 shapes at
-    atol=rtol=1e-2 — and only times it if all 15 checks pass.
+    Runs the static reward-hack checker and validates the declared deployment contract,
+    then executes the kernel in an isolated subprocess against the reference op named
+    by the task spec — 5 seeds x 3 shapes at atol=rtol=1e-2 — and only times it if all
+    15 checks pass.
 
     Args:
         kernel_code: Complete Python source of the candidate (the @triton.jit kernel
@@ -163,6 +174,10 @@ def verify_kernel(kernel_code: str, entrypoint: str, task_spec: dict) -> dict:
         entrypoint: Name of the wrapper function inside `kernel_code` to call.
         task_spec: {"op_name": one of "rmsnorm" | "layernorm" | "softmax" | "silu" |
             "rope" | "mlp", "hidden_size": int, optional "device", optional "dtype"}.
+        adapter_mapping: The candidate's `adapter_mapping` — kernel parameter name ->
+            module attribute name, e.g. {"weight": "weight", "eps": "variance_epsilon"}.
+            Checked against the real module class before anything runs. Pass it exactly
+            as the Coder wrote it; omit it only when the draft declared none.
 
     Returns:
         A dict with the Verdict fields — reward (-1..3), correctness_pass,
@@ -174,6 +189,13 @@ def verify_kernel(kernel_code: str, entrypoint: str, task_spec: dict) -> dict:
     violations = check_static(kernel_code)
     if violations:
         return _rejected_verdict(violations)
+
+    op_name_for_mapping = str(task_spec.get("op_name", "")).strip()
+    mapping_errors = validate_adapter_mapping(op_name_for_mapping, adapter_mapping)
+    if mapping_errors:
+        # Layer 2 of the three-layer contract model: no sandbox, no execution. The
+        # kernel may be perfect; the contract that deploys it is not.
+        return _mapping_rejected_verdict(mapping_errors)
 
     op_name = str(task_spec.get("op_name", "")).strip()
     hidden_size = int(task_spec.get("hidden_size", 0) or 0)
@@ -268,6 +290,26 @@ def _rejected_verdict(violations: list[tuple[int, int, str]]) -> dict[str, Any]:
         "violations": [
             {"rule_id": rule, "line": line, "description": desc} for rule, line, desc in violations
         ],
+    }
+
+
+def _mapping_rejected_verdict(errors: list[str]) -> dict[str, Any]:
+    """Adapter-contract rejection: reward -1, sandbox skipped entirely."""
+    detail = "; ".join(errors)
+    return {
+        "reward": -1,
+        "correctness_pass": False,
+        "speedup_vs_eager": 0.0,
+        "speedup_vs_compile": 0.0,
+        "next_action": (
+            "Fix adapter_mapping so every value names a real attribute of the module "
+            f"being patched: {detail}"
+        ),
+        "stop": False,
+        "stderr_tail": f"adapter_mapping rejected: {detail}"[-500:],
+        "latency_ms_by_shape": {},
+        "violations": [],
+        "adapter_mapping_errors": errors,
     }
 
 

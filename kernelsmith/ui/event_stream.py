@@ -52,7 +52,9 @@ ARG_PREVIEW_CHARS = 200
 TEXT_PREVIEW_CHARS = 1200
 #: Tool responses the bottom banner is built from, kept whole. Everything else is
 #: previewed, so a retrieval hit carrying three kernel sources cannot bloat the UI.
-BANNER_TOOLS = frozenset({"verify_kernel", "hotswap_kernel"})
+#: `explain_kernel` is here for the same reason: the right column renders the whole
+#: explanation, and a 200-char preview of it is not an explanation.
+BANNER_TOOLS = frozenset({"verify_kernel", "hotswap_kernel", "explain_kernel"})
 #: How long to wait for the background loop to come up before giving up on it.
 LOOP_START_TIMEOUT_S = 5.0
 

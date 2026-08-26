@@ -1,9 +1,10 @@
 .PHONY: demo test test-unit test-int lint format seed-skill create-index serve-inference serve-ui
 
+# CUBLAS_WORKSPACE_CONFIG is exported here as well as by seed_everything(): cuBLAS
+# reads it when its handle is created, and belt-and-braces costs nothing.
 demo:
 	@echo "=== KernelSmith Demo ==="
-	@echo "Seeding reproducibility..."
-	CUBLAS_WORKSPACE_CONFIG=:4096:8 uv run python -c "import kernelsmith; kernelsmith.run_demo()"
+	CUBLAS_WORKSPACE_CONFIG=:4096:8 uv run python -m kernelsmith.run_demo
 
 test-unit:
 	uv run pytest tests/ -k "not integration and not chaos" -v --tb=short

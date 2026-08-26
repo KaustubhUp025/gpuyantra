@@ -46,6 +46,16 @@ class KernelDraft(BaseModel):
     rationale: str = Field(
         ..., description="Why this kernel should be faster, referencing the fingerprint"
     )
+    adapter_mapping: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Deployment contract: kernel parameter name -> attribute on the module "
+            'being patched, e.g. {"weight": "weight", "eps": "variance_epsilon"}. The '
+            "forward's input tensor is implicit and must NOT appear here. Validated by "
+            "verifier.adapter_mapping before the kernel is run; empty means fall back "
+            "to the hard-coded per-op adapter."
+        ),
+    )
 
 
 class Verdict(BaseModel):

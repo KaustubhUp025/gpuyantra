@@ -28,6 +28,7 @@ from kernelsmith import config
 from kernelsmith.agents.profiler_agent import build_profiler_agent
 from kernelsmith.agents.refinement_loop import build_refinement_loop
 from kernelsmith.agents.state_view import render
+from kernelsmith.tools.explainer_tool import explainer_tool
 from kernelsmith.tools.hotswap_tool import hotswap_tool
 from kernelsmith.tools.retrieval_tool import retrieval_tool
 from kernelsmith.tools.upsert_tool import upsert_tool
@@ -43,8 +44,10 @@ WHAT HAS HAPPENED SO FAR (read this before acting — steps already done must no
 - retrieved_skills: {skills_status}
 - refinement result: best_reward={best_reward}, iterations={iteration}
 - winning entrypoint: {best_entrypoint}
+- winning adapter_mapping: {best_adapter_mapping}
 - last verdict: {verdict}
 - hot-swap: {hotswap_status}
+- kernel explanation: {explanation_status}
 
 PROTOCOL — do the first step below that is not yet done, then stop:
 1. If bottleneck_fingerprint is not set, delegate to the Profiler.
@@ -69,13 +72,21 @@ PROTOCOL — do the first step below that is not yet done, then stop:
      kernel_source: best_kernel from state, verbatim and complete
      entrypoint: the winning entrypoint above
      op_name: the op being optimized ("rmsnorm", "swiglu" or "rope")
+     adapter_mapping: best_adapter_mapping from state, verbatim — the deployment
+       contract the Coder declared and the verifier validated. Never edit it.
    A reward of +1 is correct but not faster than eager — never hot-swap it. The server
    parity-checks the kernel against the original forward and rolls back on its own if
    it disagrees; if the result says success=false or rolled_back=true, report that
    plainly and do NOT retry the swap.
-6. Then write a short summary: the op, the fingerprint verdict, the reward, the
+6. If the skill has been saved and no explanation has been generated yet, call
+   explainer_tool ONCE with kernel_source = best_kernel from state, verbatim. It
+   returns a plain-English explanation of the winning kernel for the dashboard. If it
+   returns a string starting with "error:", say so in the summary and move on — a
+   missing explanation never fails a run.
+7. Then write a short summary: the op, the fingerprint verdict, the reward, the
    measured speedups, whether the skill was saved, and whether the kernel is now live
    on the inference server. Be exact about numbers and never round a speedup upward.
+   Do not paste the explanation into the summary; the dashboard renders it.
 
 Report the verifier's numbers as they are. A kernel that did not beat torch.compile did
 not beat torch.compile.
@@ -97,9 +108,13 @@ def build_instruction(ctx: ReadonlyContext) -> str:
         skills_status=skills_status,
         best_reward=render(state.get("best_reward"), empty="not set"),
         best_entrypoint=render(state.get("best_entrypoint"), empty="not set"),
+        best_adapter_mapping=render(state.get("best_adapter_mapping"), empty="not set"),
         iteration=render(state.get("iteration"), empty="0"),
         verdict=render(state.get("verdict"), empty="none yet"),
         hotswap_status=render(state.get("hotswap_result"), empty="not attempted"),
+        explanation_status=(
+            "generated" if state.get("kernel_explanation") else "not generated yet"
+        ),
     )
 
 
@@ -112,18 +127,31 @@ def capture_tool_results(
 ) -> None:
     """after_tool_callback: publish tool results into state (spec 4.1).
 
-    Two things have to outlive the turn they happened in. Retrieved skills, because
+    Four things have to outlive the turn they happened in. Retrieved skills, because
     the Coder has no tools and can only see them through `session.state`. And the
     hot-swap result, because the Supervisor is resumed from state on the follow-up
-    turn — without it, a second turn would re-swap a kernel that is already live.
+    turn — without it, a second turn would re-swap a kernel that is already live. And
+    the bandit's selected arm, which is credited at the end of the refinement loop. And
+    Gemma's explanation, which the dashboard renders from state.
 
     Returns None so the model still sees each tool's own response.
     """
+    if tool.name == explainer_tool.name:
+        # FunctionTool wraps a str return as {"result": ...}; the dashboard reads the
+        # text out of state rather than out of the Supervisor's prose.
+        if isinstance(tool_response, dict):
+            tool_context.state["kernel_explanation"] = str(tool_response.get("result", ""))
+        else:
+            tool_context.state["kernel_explanation"] = str(tool_response)
+        return None
     if not isinstance(tool_response, dict):
         return None
     if tool.name == retrieval_tool.name:
         skills = tool_response.get("skills")
         tool_context.state["retrieved_skills"] = skills if isinstance(skills, list) else []
+        # The bandit's pick, so the EscalationChecker can credit that arm with the
+        # verifier's reward once the loop finishes (spec 9).
+        tool_context.state["selected_skill_id"] = str(tool_response.get("selected_skill_id") or "")
     elif tool.name == hotswap_tool.name:
         tool_context.state["hotswap_result"] = tool_response
     return None
@@ -136,11 +164,11 @@ def build_supervisor() -> LlmAgent:
         model=config.PRIMARY_MODEL,
         description=(
             "Root agent. Profiles an op, retrieves prior skills, runs the refinement "
-            "loop, saves the winning kernel to the skill library, and hot-swaps it "
-            "into the live inference server."
+            "loop, saves the winning kernel to the skill library, hot-swaps it into "
+            "the live inference server, and has Gemma explain the winning kernel."
         ),
         instruction=build_instruction,
-        tools=[retrieval_tool, upsert_tool, hotswap_tool],
+        tools=[retrieval_tool, upsert_tool, hotswap_tool, explainer_tool],
         sub_agents=[build_profiler_agent(), build_refinement_loop()],
         output_key="supervisor_summary",
         after_tool_callback=capture_tool_results,

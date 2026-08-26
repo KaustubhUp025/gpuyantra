@@ -133,6 +133,7 @@ def init_state() -> None:
     state.setdefault("run_error", "")
     state.setdefault("rejection", None)
     state.setdefault("swap", None)
+    state.setdefault("explanation", "")
     state.setdefault("autorefresh_error", "")
 
 
@@ -256,6 +257,11 @@ def update_banners(summary: EventSummary) -> None:
                     f"hot-swap refused: {payload.get('error', 'unknown reason')}"
                     + (" (rolled back)" if payload.get("rolled_back") else "")
                 )
+        elif name == "explain_kernel":
+            # FunctionTool wraps the str return as {"result": ...}. The tool reports its
+            # own failures as text starting with "error:", so show them as a caption
+            # rather than swallowing them.
+            state["explanation"] = str(payload.get("result", "")).strip()
 
 
 def _violation_text(violations: Any) -> str:
@@ -294,6 +300,7 @@ def start_optimization(op_name: str, hidden_size: int) -> None:
     state["run_error"] = ""
     state["rejection"] = None
     state["swap"] = None
+    state["explanation"] = ""
     state["tps_before_swap"] = _last_tps(state["samples"])
     state["tps_after_swap"] = None
 
@@ -476,12 +483,33 @@ def render_library() -> None:
     else:
         st.caption(skills_error or "no skills saved yet")
 
+    render_explanation()
+
     st.subheader("Run History")
     runs, runs_error = load_runs()
     if runs:
         st.dataframe(runs, use_container_width=True, hide_index=True)
     else:
         st.caption(runs_error or "no runs recorded yet")
+
+
+def render_explanation() -> None:
+    """Right column: Gemma's plain-English read of the winning kernel (spec 15).
+
+    A different model family from the agents, so it is a second opinion on the kernel
+    rather than the Coder marking its own homework — and it is the answer to "I can't
+    write GPU kernels": the system wrote one and then explained it back.
+    """
+    explanation = st.session_state["explanation"]
+    if not explanation:
+        return
+
+    st.subheader("Kernel Explained (Gemma 4)")
+    if explanation.startswith("error:"):
+        st.caption(f"explanation unavailable — {explanation}")
+        return
+    with st.expander("What the winning kernel does", expanded=True):
+        st.markdown(explanation)
 
 
 def render_banner() -> None:

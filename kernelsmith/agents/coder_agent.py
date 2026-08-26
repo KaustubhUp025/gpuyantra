@@ -49,6 +49,25 @@ RULES:
 `entrypoint` must name a plain Python wrapper function defined in `code` that takes the
 same arguments as the reference op and returns the same tensor. The verifier imports
 `code` and calls that function directly.
+
+DEPLOYMENT CONTRACT (`adapter_mapping`) — required, and checked before your kernel runs:
+The verified kernel is hot-swapped into a live model by rebinding the module's
+`forward`, so something has to say where your wrapper's arguments come from. That is
+your job, not a human's. Map every wrapper parameter AFTER the input tensor to the
+attribute on the target module that supplies it:
+
+    entrypoint: rmsnorm_triton(x, weight, eps)
+    target:     Qwen2RMSNorm, which owns `self.weight` and `self.variance_epsilon`
+    adapter_mapping: {{"weight": "weight", "eps": "variance_epsilon"}}
+
+Rules:
+- The input tensor (`x` / `hidden_states`) is passed positionally. NEVER map it.
+- Every value must be a real attribute of the target module. Dotted paths are allowed
+  ("gate_proj.weight"). A name that does not exist scores -1 without your kernel ever
+  being run, so use the module's actual attribute names — `variance_epsilon`, not `eps`.
+- Map data (parameters, buffers, submodules), never methods.
+- Target modules: rmsnorm -> Qwen2RMSNorm (weight, variance_epsilon);
+  swiglu/mlp -> Qwen2MLP (gate_proj, up_proj, down_proj, act_fn).
 """
 
 

@@ -22,6 +22,10 @@ from kernelsmith.memory.schemas import BottleneckFingerprint, SkillRecord
 
 SKILL_ID = "rmsnorm_fp16_l4_v1"
 
+#: Warm start from the replay buffer: 3 hand-tested pulls, all +3 -> mean reward 3.0.
+SEED_BANDIT_PULLS = 3
+SEED_BANDIT_TOTAL_REWARD = 9.0
+
 # Hand-written fused RMSNorm. Numerically matches Qwen2RMSNorm:
 #   y = x * rsqrt(mean(x^2) + eps) * weight, with the reduction in fp32.
 RMSNORM_KERNEL_SOURCE = '''
@@ -113,6 +117,11 @@ def build_seed_skill() -> SkillRecord:
         ),
         embedding=embedding,
         tags=["rmsnorm", "norm", "memory-bound", "fused", "seed", "hand-written"],
+        # Bandit warm start (spec 9): three hand-tested runs at reward +3, so mean = 3.0.
+        # Without this the seed arm looks unpulled and UCB1 explores it exactly as it
+        # would a kernel nobody has ever run — throwing away results we already have.
+        bandit_pulls=SEED_BANDIT_PULLS,
+        bandit_total_reward=SEED_BANDIT_TOTAL_REWARD,
     )
 
 
@@ -138,6 +147,10 @@ def main() -> None:
 
     result = upsert_skill(skill)
     print(f"{result}: skills/{skill.skill_id} (fingerprint: {FINGERPRINT.to_embedding_text()})")
+    print(
+        f"bandit warm start: {skill.bandit_pulls} pulls, "
+        f"mean reward {skill.bandit_total_reward / skill.bandit_pulls:.1f}"
+    )
 
 
 if __name__ == "__main__":

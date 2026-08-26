@@ -24,7 +24,12 @@ def swap_url() -> str:
     return f"http://{INFERENCE_HOST}:{INFERENCE_PORT}/swap"
 
 
-def hotswap_kernel(kernel_source: str, entrypoint: str, op_name: str) -> dict:
+def hotswap_kernel(
+    kernel_source: str,
+    entrypoint: str,
+    op_name: str,
+    adapter_mapping: dict | None = None,
+) -> dict:
     """Hot-swap a verified kernel into the running inference server.
 
     Call this ONLY for a kernel the verifier scored >= +2 (correct and faster than
@@ -37,6 +42,9 @@ def hotswap_kernel(kernel_source: str, entrypoint: str, op_name: str) -> dict:
         kernel_source: Complete Python source of the winning kernel, verbatim.
         entrypoint: Name of the wrapper function inside that source.
         op_name: Which op to patch: "rmsnorm", "swiglu" or "rope".
+        adapter_mapping: The verified deployment contract from the winning draft —
+            kernel parameter name -> module attribute name. Pass it exactly as the
+            Coder wrote it; {} falls back to the hard-coded per-op adapter.
 
     Returns:
         {"success": bool, "op_name": str, ...}. On success: "modules_patched" and
@@ -45,7 +53,12 @@ def hotswap_kernel(kernel_source: str, entrypoint: str, op_name: str) -> dict:
         whether the model was restored. Report the result as-is; a failed swap must
         never be described as a success.
     """
-    payload = {"op_name": op_name, "kernel_source": kernel_source, "entrypoint": entrypoint}
+    payload = {
+        "op_name": op_name,
+        "kernel_source": kernel_source,
+        "entrypoint": entrypoint,
+        "adapter_mapping": dict(adapter_mapping or {}),
+    }
     try:
         response = httpx.post(swap_url(), json=payload, timeout=HOTSWAP_TIMEOUT_S)
     except httpx.HTTPError as exc:

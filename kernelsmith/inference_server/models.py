@@ -47,7 +47,7 @@ def load_model() -> tuple[Any, Any]:
     tokenizer = AutoTokenizer.from_pretrained(SERVED_MODEL)
     model = AutoModelForCausalLM.from_pretrained(
         SERVED_MODEL,
-        torch_dtype=torch.float16,
+        dtype=torch.float16,  # `torch_dtype` is deprecated in transformers 4.57.6
         device_map="cuda",
     )
     model.eval()

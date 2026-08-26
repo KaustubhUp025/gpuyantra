@@ -19,6 +19,8 @@ dependencies = [
     "torch==2.12.1",
     "triton==3.7.1",
     "transformers==4.57.6",
+    # device_map="cuda" in from_pretrained() imports accelerate; missing from spec S0.
+    "accelerate>=1.14.0",
     # --- Inference server ---
     "fastapi==0.141.1",
     "uvicorn[standard]==0.52.4",

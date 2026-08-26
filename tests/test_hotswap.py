@@ -557,7 +557,26 @@ def test_hotswap_tool_posts_to_the_configured_server(monkeypatch):
         "op_name": "rmsnorm",
         "kernel_source": GOOD_KERNEL,
         "entrypoint": "rmsnorm_forward",
+        # The declared deployment contract travels with the kernel; {} means the
+        # server falls back to the hard-coded per-op adapter.
+        "adapter_mapping": {},
     }
+
+
+def test_hotswap_tool_forwards_a_declared_adapter_mapping(monkeypatch):
+    """The contract the verifier validated is what the server must re-validate."""
+    captured = {}
+
+    def fake_post(url, json, timeout):
+        captured.update(json=json)
+        return FakeResponse(200, {"success": True, "modules_patched": 5})
+
+    monkeypatch.setattr(hotswap_module.httpx, "post", fake_post)
+    mapping = {"weight": "weight", "eps": "variance_epsilon"}
+
+    hotswap_kernel(GOOD_KERNEL, "rmsnorm_forward", "rmsnorm", mapping)
+
+    assert captured["json"]["adapter_mapping"] == mapping
 
 
 def test_hotswap_tool_reports_a_refused_swap_as_a_failure(monkeypatch):
@@ -603,7 +622,12 @@ def test_hotswap_tool_is_wired_into_the_supervisor():
     from kernelsmith.agents.supervisor import build_supervisor
 
     tools = [t.name for t in build_supervisor().tools]
-    assert tools == ["retrieve_skills_for_agent", "upsert_skill", "hotswap_kernel"]
+    assert tools == [
+        "retrieve_skills_for_agent",
+        "upsert_skill",
+        "hotswap_kernel",
+        "explain_kernel",
+    ]
     assert hotswap_tool.name == "hotswap_kernel"
 
 

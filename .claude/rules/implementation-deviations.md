@@ -307,3 +307,114 @@ describe different kernels, and a continuous line would smooth over the disconti
 the demo is claiming.
 
 *Source: Task 6, Claude Code decision.*
+
+---
+
+## accelerate added as required dependency (adds to §0 stack)
+
+device_map='cuda' in AutoModelForCausalLM.from_pretrained() requires accelerate at import time. Missing from original spec §0 stack. Pinned at accelerate>=1.14.0 (VM smoke test installed 1.14.0 on Aug 26). Must be added to pyproject.toml dependencies.
+
+Source: VM smoke test, Aug 26.
+
+---
+
+## torch_dtype → dtype parameter rename (affects §8 inference server)
+
+transformers==4.57.6 emits a deprecation warning: "torch_dtype is deprecated! Use dtype instead!" All calls to AutoModelForCausalLM.from_pretrained() and any other HuggingFace API using torch_dtype= must be replaced with dtype=. This affects kernelsmith/inference_server/models.py and any test fixtures that load models. The parameter semantics are identical — only the name changed.
+
+Source: VM smoke test, Aug 26.
+
+---
+
+## VM environment snapshot (reference for Task 9 version pins)
+
+Recorded during VM smoke test, Aug 26:
+
+DLVM image: pytorch-2-9-cu129-ubuntu-2204-nvidia-580
+NVIDIA driver: 580.173.02, CUDA capability: 13.0
+System Python: 3.10.12; uv venv Python: 3.14.7
+torch==2.12.1+cu130, triton==3.7.1, transformers==4.57.6
+accelerate==1.14.0, numpy==2.4.6
+GPU: NVIDIA L4, 23034 MiB VRAM, model uses 3.09 GB at FP16
+Qwen2RMSNorm: 57 modules, weight shape [1536], variance_epsilon=1e-06
+CUBLAS_WORKSPACE_CONFIG not set in shell (dotenv loads it into Python); add export CUBLAS_WORKSPACE_CONFIG=:4096:8 to VM ~/.bashrc before Task 8.
+
+*Source: VM smoke test, Aug 26.*
+
+---
+
+## Adapter-mapping validation lives in `verifier/`, and probes a meta-device instance (implements the generic-adapter section)
+
+Two decisions the generic-adapter spec above left open.
+
+**Where.** `validate_adapter_mapping` is `kernelsmith/verifier/adapter_mapping.py`, not
+`patchable_ops.py`. It is a verifier gate (layer 2, run before the sandbox), and putting
+it in `inference_server/` would make the verifier import the server package. The
+generic adapter itself (`build_forward_from_mapping`) stays in `patchable_ops.py`, next
+to the hard-coded adapters it supersedes.
+
+**How the attributes are checked.** The spec says `hasattr()` on
+`OP_REGISTRY[op_name].module_cls`. `hasattr(Qwen2RMSNorm, "weight")` is **False** —
+`weight` and `variance_epsilon` are assigned in `__init__`, so they exist on instances,
+not on the class. `OP_REGISTRY` also maps op names to *builder callables*, which carry
+no `module_cls`. So:
+
+- a separate `_OP_MODULES` table maps normalized op names to the transformers class
+  (`rmsnorm` → `Qwen2RMSNorm`, `mlp`/`swiglu` → `Qwen2MLP`), and
+- the check builds a real instance under `torch.device("meta")` — zero bytes allocated,
+  no GPU — and runs `hasattr` against *that*.
+
+Ops with no `nn.Module` in Qwen2 (`rope`, `softmax`, `silu`, `layernorm`) reject any
+non-empty mapping: an unvalidatable contract is also an undeployable one.
+
+If the probe cannot be built (transformers missing, a signature change upstream),
+validation degrades to a declared name allowlist rather than blocking a verified
+kernel — layers 3 (5x3 numerical gate) and the server's parity gate are still in front
+of the live model.
+
+Also: dotted paths (`"gate_proj.weight"`) are supported, `swiglu`/`mlp` and
+`rms_norm`/`rmsnorm` are aliases, and mapping the implicit input arg (`x`,
+`hidden_states`) is an error, not a no-op.
+
+*Source: Task 7, Claude Code decision.*
+
+---
+
+## The bandit is credited by the EscalationChecker, once per run (implements §9)
+
+One run is one pull. The reward that matters is `best_reward`, which is only final when
+the RefinementLoop escalates — so the credit is written there, guarded by
+`bandit_credited` in `session.state`, via `EventActions(state_delta=...)` (direct state
+mutation inside `_run_async_impl` does not persist in ADK). Crediting per iteration
+would record six pulls for one experiment; crediting from the Supervisor's upsert step
+would silently skip every run that scored below +1, biasing every arm's mean upward.
+
+This is the one side effect in an otherwise pure agent. It runs through
+`asyncio.to_thread`, swallows its own failures, and marks the run credited either way —
+a retry could double-count a write that actually landed.
+
+`retrieve_skills_for_agent` returns `selected_skill_id` and reorders `skills` so the
+bandit's pick leads; the Supervisor's `after_tool_callback` copies that id into state
+for the checker to use.
+
+*Source: Task 7, Claude Code decision.*
+
+---
+
+## `run_demo()` drives both turns itself and owns the inference server subprocess (implements §16)
+
+`make demo` runs `python -m kernelsmith.run_demo`. The two-message Supervisor protocol
+documented above is real for the CLI too: `run_demo` sends turn 1 (profile → retrieve →
+refine) and then turn 2 (upsert → hot-swap → explain → summarize) into the same session.
+A single-message demo silently skips the hot-swap and reports a run that never went live.
+
+`seed_everything()` runs before anything imports torch, because `CUBLAS_WORKSPACE_CONFIG`
+is read when the cuBLAS handle is created and ignored afterwards. The Makefile also
+exports it, belt-and-braces.
+
+The inference server is started as a `uvicorn` **subprocess** and stopped on exit; if a
+healthy server is already on the port, it is reused and left running. `--no-server`
+attaches without starting one. Every number printed comes from `best_verdict`, never
+from the Supervisor's prose summary.
+
+*Source: Task 7, Claude Code decision.*
