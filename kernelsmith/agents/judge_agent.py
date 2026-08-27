@@ -28,7 +28,7 @@ from google.adk.agents.readonly_context import ReadonlyContext
 from kernelsmith import config
 from kernelsmith.agents.state_view import as_dict, render
 from kernelsmith.memory.schemas import Verdict
-from kernelsmith.tools.verifier_tool import verifier_tool
+from kernelsmith.tools.verifier_tool import adapter_mapping_from_draft, verifier_tool
 
 logger = logging.getLogger(__name__)
 
@@ -49,10 +49,10 @@ PROTOCOL:
    - kernel_code: the candidate's `code` field, verbatim and complete
    - entrypoint: the candidate's `entrypoint` field
    - task_spec: the task above, as {{"op_name": ..., "hidden_size": ...}}
-   - adapter_mapping: the candidate's `adapter_mapping` field, verbatim (pass {{}} if
-     the draft declared none). Never invent or "fix" it yourself — an invalid contract
-     is a -1 the Coder has to repair, and the verifier checks it against the real
-     module class before anything runs.
+   The deployment contract is NOT yours to pass: the tool reads the candidate's
+   `adapter_mapping` straight from the draft. Never restate, invent or "fix" it — an
+   invalid contract is a -1 the Coder has to repair, and the verifier checks it against
+   the real module class before anything runs.
 2. Read the reward JSON it returns. Its numbers are final — never restate them from
    memory and never adjust them.
 3. Decide next_action from the reward:
@@ -232,8 +232,9 @@ def record_verdict(callback_context: CallbackContext) -> None:
             state["best_entrypoint"] = entrypoint
         # The deployment contract travels with the kernel: the Supervisor needs it to
         # hot-swap this draft, and it is overwritten on the next iteration like the rest.
-        mapping = draft.get("adapter_mapping")
-        state["best_adapter_mapping"] = mapping if isinstance(mapping, dict) else {}
+        # Converted from the draft's list-of-bindings into the {param: attr} form every
+        # consumer downstream takes — and tolerant of the legacy dict shape.
+        state["best_adapter_mapping"] = adapter_mapping_from_draft(draft)
         state["best_verdict"] = verdict.model_dump()
 
     return None

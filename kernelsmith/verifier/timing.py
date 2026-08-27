@@ -7,7 +7,8 @@ Red line #10: never torch.compile before monkey-patching. `measure_baselines` co
 the REFERENCE op, so callers must measure baselines before any hot-swap is applied.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from typing import Any
 
 import torch
@@ -33,6 +34,29 @@ def bench_kernel(
     return float(triton.testing.do_bench(fn, warmup=warmup, rep=rep, return_mode="median"))
 
 
+@contextmanager
+def _nondeterministic_for_timing() -> Iterator[None]:
+    """Turn deterministic algorithm selection off for the duration of a timed baseline.
+
+    `torch.use_deterministic_algorithms(True)` forces slower cuBLAS/cuDNN codepaths and
+    costs the eager and torch.compile baselines ~23% — while leaving a Triton candidate
+    untouched, because Triton generates its own PTX and never consults the flag. Timing
+    the baselines under it therefore manufactures a speedup out of a measurement
+    artifact: 8.52x vs eager with the flag on, 6.9x with it off.
+
+    The flag stays ON everywhere else — correctness checks, the agent loop, the demo.
+    Only the timed comparison runs without it, and the previous setting (including
+    `warn_only`) is restored even if benchmarking raises.
+    """
+    was_enabled = torch.are_deterministic_algorithms_enabled()
+    was_warn_only = torch.is_deterministic_algorithms_warn_only_enabled()
+    torch.use_deterministic_algorithms(False)
+    try:
+        yield
+    finally:
+        torch.use_deterministic_algorithms(was_enabled, warn_only=was_warn_only)
+
+
 def measure_baselines(
     reference_fn: Callable[[torch.Tensor], torch.Tensor],
     x: torch.Tensor,
@@ -43,18 +67,24 @@ def measure_baselines(
        Timing against TF32-off eager would hand us a free ~2x on any matmul.
     2. torch.compile(mode="reduce-overhead") — the bar for the +3 milestone.
 
+    Both are timed with deterministic algorithms OFF, so the baselines are not
+    handicapped by a flag the Triton candidate never pays. See
+    `_nondeterministic_for_timing`.
+
     Returns {"eager_ms": float, "compile_ms": float}.
     """
     torch.set_float32_matmul_precision("high")
-    eager_ms = bench_kernel(lambda: reference_fn(x))
 
-    compiled = torch.compile(reference_fn, mode="reduce-overhead")
-    # Warm the compile cache outside the timed region: the first call pays
-    # dynamo + inductor compilation, and CUDA graphs need a capture run.
-    for _ in range(3):
-        compiled(x)
-    torch.cuda.synchronize()
-    compile_ms = bench_kernel(lambda: compiled(x))
+    with _nondeterministic_for_timing():
+        eager_ms = bench_kernel(lambda: reference_fn(x))
+
+        compiled = torch.compile(reference_fn, mode="reduce-overhead")
+        # Warm the compile cache outside the timed region: the first call pays
+        # dynamo + inductor compilation, and CUDA graphs need a capture run.
+        for _ in range(3):
+            compiled(x)
+        torch.cuda.synchronize()
+        compile_ms = bench_kernel(lambda: compiled(x))
 
     return {"eager_ms": eager_ms, "compile_ms": compile_ms}
 

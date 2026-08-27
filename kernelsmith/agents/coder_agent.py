@@ -58,9 +58,13 @@ attribute on the target module that supplies it:
 
     entrypoint: rmsnorm_triton(x, weight, eps)
     target:     Qwen2RMSNorm, which owns `self.weight` and `self.variance_epsilon`
-    adapter_mapping: {{"weight": "weight", "eps": "variance_epsilon"}}
+    adapter_mapping: [{{"kernel_param": "weight", "module_attr": "weight"}},
+                      {{"kernel_param": "eps",    "module_attr": "variance_epsilon"}}]
 
 Rules:
+- It is a LIST of {{"kernel_param": ..., "module_attr": ...}} objects, one per wrapper
+  parameter after the input tensor. An empty list means "no contract", which throws
+  away the whole point — fill it in.
 - The input tensor (`x` / `hidden_states`) is passed positionally. NEVER map it.
 - Every value must be a real attribute of the target module. Dotted paths are allowed
   ("gate_proj.weight"). A name that does not exist scores -1 without your kernel ever

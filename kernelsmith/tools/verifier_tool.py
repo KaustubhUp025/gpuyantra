@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from google.adk.tools import FunctionTool
+from google.adk.tools.tool_context import ToolContext
 
 from kernelsmith.config import GCP_PROJECT, SANDBOX_TIMEOUT_S
 from kernelsmith.verifier.adapter_mapping import validate_adapter_mapping
@@ -348,6 +349,78 @@ def _as_float(value: Any) -> float:
     return 0.0 if result != result else result
 
 
+def adapter_mapping_from_draft(draft: Any) -> dict[str, str]:
+    """Read the deployment contract out of a `KernelDraft`, in either shape.
+
+    Accepts the current list-of-bindings form and the legacy `{param: attr}` mapping,
+    so a session or Firestore row written before the schema changed still deploys.
+    Anything unrecognized becomes `{}`, which the hard-coded per-op adapter handles.
+    """
+    if isinstance(draft, str):
+        try:
+            draft = json.loads(draft)
+        except (TypeError, ValueError):
+            return {}
+    if not isinstance(draft, dict):
+        return {}
+
+    mapping = draft.get("adapter_mapping")
+    if isinstance(mapping, dict):  # legacy shape
+        return {str(k): str(v) for k, v in mapping.items()}
+    if not isinstance(mapping, list):
+        return {}
+
+    contract: dict[str, str] = {}
+    for entry in mapping:
+        if isinstance(entry, dict):
+            param, attr = entry.get("kernel_param"), entry.get("module_attr")
+            if param and attr:
+                contract[str(param)] = str(attr)
+    return contract
+
+
+def verify_kernel_for_agent(
+    kernel_code: str,
+    entrypoint: str,
+    task_spec: dict,
+    tool_context: ToolContext = None,  # type: ignore[assignment]
+) -> dict:
+    """Verify a generated Triton kernel and return its scored verdict.
+
+    Call this exactly ONCE per iteration, with the candidate's `code` and `entrypoint`
+    verbatim. The deployment contract is read from the draft automatically — you do not
+    pass it and you must not restate it.
+
+    Args:
+        kernel_code: Complete Python source of the candidate (the @triton.jit kernel
+            plus its Python wrapper), verbatim from the draft's `code` field.
+        entrypoint: Name of the wrapper function inside `kernel_code` to call.
+        task_spec: {"op_name": ..., "hidden_size": ...} for the op being optimized.
+
+    Returns:
+        The reward JSON: reward, correctness_pass, speedups, latency_ms_by_shape,
+        violations, adapter_mapping_errors and stderr_tail. Its numbers are final.
+    """
+    # Deliberately NOT an argument the model fills in. `adapter_mapping` is a
+    # `dict[str, str]`, and a free-form mapping in a function declaration has no named
+    # properties for structured generation to anchor on — the model emitted `{}` on
+    # every call, silently downgrading the swap to the hard-coded adapter. It is also
+    # the one field the Judge is explicitly forbidden to "fix", so routing it through
+    # the model was a transcription risk with no upside. Read it from the draft the
+    # Coder actually produced.
+    state = getattr(tool_context, "state", None) if tool_context is not None else None
+    draft = state.get("kernel_draft") if state is not None else None
+    return verify_kernel(kernel_code, entrypoint, task_spec, adapter_mapping_from_draft(draft))
+
+
+# The tool's LLM-facing name is a stable contract: it appears in the Judge's prompt and
+# is what `find_verifier_response` matches against in the event log. Keep it
+# `verify_kernel` even though the Python callable is the wrapper, so that swapping the
+# implementation underneath never renames the tool.
+verify_kernel_for_agent.__name__ = "verify_kernel"
+
 #: Registered on the Judge agent (spec 4.2). The Judge has NO output_schema — ADK
 #: cannot combine tools with a schema (bug #3969) — so it parses the Verdict itself.
-verifier_tool = FunctionTool(verify_kernel)
+#: The agent-facing wrapper takes no `adapter_mapping`; `verify_kernel` remains the
+#: direct entry point for tests and any programmatic caller.
+verifier_tool = FunctionTool(verify_kernel_for_agent)

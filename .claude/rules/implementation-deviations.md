@@ -418,3 +418,138 @@ attaches without starting one. Every number printed comes from `best_verdict`, n
 from the Supervisor's prose summary.
 
 *Source: Task 7, Claude Code decision.*
+
+---
+
+## Baseline fairness fix is now IMPLEMENTED, not just documented (closes "Baseline measurement fairness")
+
+The deviation above was written but never landed in code: `measure_baselines()` timed
+both baselines with `torch.use_deterministic_algorithms(True)` still on. It now wraps
+the timed region in `_nondeterministic_for_timing()`, which saves the flag (and
+`warn_only`), turns it off, and restores it in a `finally` so a benchmark that raises
+cannot leave determinism off for the correctness gate.
+
+Measured on the seed RMSNorm kernel after the fix: **6.92x vs eager, 1.36x vs
+torch.compile** — matching the "fair" numbers this file predicted, against the 8.52x the
+flag was inflating them to. Locked down by `tests/test_timing.py`, which asserts the
+flag is off during both baselines and restored after (including on exceptions).
+
+*Source: Task 8.*
+
+---
+
+## `/swap` must import kernel source from a REAL FILE (fixes a 100% hot-swap failure)
+
+`_load_entrypoint` used `exec(compile(source, "<hotswap-kernel>", "exec"))`. `@triton.jit`
+calls `inspect.getsourcelines` on the decorated function at DECORATION time, so with no
+file on disk it raises:
+
+    ValueError: @jit functions should be defined in a Python file
+
+Every kernel this system produces is a Triton kernel, so **every** hot-swap failed —
+and failed as a refused `/swap` carrying a load error, which reads like a bad kernel
+rather than a broken loader. The demo's money shot (beat 9) could never have fired.
+
+It now writes the source into a process-lifetime temp dir and imports it via
+`importlib.util.spec_from_file_location`, the same mechanism the verifier sandbox
+already used. Two details that are load-bearing:
+
+- the module is registered in `sys.modules` **before** `exec_module`, so `inspect` can
+  resolve it while the `@triton.jit` decorators at module top level are still running;
+- the file is **not** deleted afterwards. Triton compiles lazily and re-reads the source
+  when it specializes for a new shape or dtype, so cleaning up at the end of the load
+  would move the failure from swap time to first-token time.
+
+The gap that hid this: every test in `test_hotswap.py` used a pure-torch stand-in
+kernel. `tests/test_hotswap.py` now carries Triton-specific loader tests (they need no
+GPU — decoration is what fails).
+
+*Source: Task 8, found while validating the generic adapter on real Qwen2 modules.*
+
+---
+
+## The deployment contract must never be a free-form dict on an LLM boundary
+
+Observed live: the Judge called `verify_kernel(..., adapter_mapping={})` on every run,
+and the Coder's draft carried `{}` too. The generic adapter — the novel contribution —
+therefore never ran once. Every green check still passed, because an empty contract is
+not an error anywhere: it silently falls back to the hard-coded per-op adapter, i.e.
+the human-written bridge this project claims the agent writes for itself. The demo beat
+("No human wrote the adapter") would have been false with a full row of green ticks.
+
+**Root cause.** `dict[str, str]` compiles to a JSON schema with no named properties, so
+structured generation has nothing to anchor on and emits `{}`. Measured directly
+against gemini-3.7-flash, same prompt, 3 trials each:
+
+| Schema | Filled correctly |
+|---|---|
+| `adapter_mapping: dict[str, str]` | **0/3** (`{}` every time) |
+| `adapter_mapping: list[AdapterBinding]` | **3/3** |
+
+Making the field merely *required* was not enough — `{}` satisfies a required dict.
+
+**Fix, at both LLM boundaries.**
+
+1. `KernelDraft.adapter_mapping` is now `list[AdapterBinding]`, where `AdapterBinding`
+   has two named string fields (`kernel_param`, `module_attr`). `KernelDraft.
+   mapping_as_dict()` converts to the `{param: attr}` form every consumer downstream
+   already takes, so the validator, `build_forward_from_mapping` and `/swap` are
+   unchanged.
+2. The Judge no longer passes the contract at all. `verifier_tool` is built from
+   `verify_kernel_for_agent`, whose LLM-facing parameters are exactly
+   `kernel_code`, `entrypoint`, `task_spec`; it reads the mapping from
+   `state["kernel_draft"]` via `tool_context`. This removes the second free-form dict
+   and structurally enforces the rule the prompt could only ask for — the Judge must
+   never invent or "fix" the contract.
+
+`adapter_mapping_from_draft()` accepts the list form, the legacy dict form, and a raw
+JSON string, and degrades to `{}` on anything malformed rather than raising.
+
+The tool's published name stays `verify_kernel` (`find_verifier_response` matches on it
+and the Judge's prompt names it), pinned via `__name__` on the wrapper.
+
+Confirmed live after the fix — the Coder now emits:
+
+    [{"kernel_param": "weight", "module_attr": "weight"},
+     {"kernel_param": "eps",    "module_attr": "variance_epsilon"}]
+
+which is exactly the contract the real `Qwen2RMSNorm` requires.
+
+**General rule for this codebase: never put a free-form `dict[str, str]` on a boundary
+an LLM has to fill.** Use a list of objects with named fields.
+
+*Source: Task 8, observed in a live dashboard run and confirmed by an A/B on the schema.*
+
+---
+
+## Task 8 validated on an RTX A500 (4 GB), not an L4 — what that does and does not cover
+
+Task 8 ran on a laptop RTX A500 Laptop GPU (4096 MiB, driver 580.173.02, CUDA 13.0,
+Python 3.12.12, torch 2.12.1+cu130), not the g2-standard-4 L4 the spec targets.
+
+Fully validated here, and hardware-independent:
+
+- the verifier end to end — 15/15 correctness checks, reward +3, 6.92x / 1.36x;
+- the whole agent tree over live `gemini-3.7-flash` (16 integration tests);
+- Firestore vector retrieval, the UCB1 bandit, and the composite index;
+- the generic adapter on **real `Qwen2RMSNorm` modules**: contract validates, the
+  generic path is taken rather than the fallback (asserted on `__qualname__`), parity
+  holds at atol=1e-2, rollback is bitwise-exact, 6.90x on a 4-layer stack;
+- the real Qwen2 architecture's attribute names, read from `AutoConfig` +
+  `from_config` on a meta device: `weight` [1536], `variance_epsilon` 1e-06,
+  **57 `Qwen2RMSNorm` modules** — matching the Aug 26 VM smoke test exactly;
+- the dashboard: renders with no exceptions via `AppTest`, and all five agents
+  (Supervisor, Profiler, Coder, Judge, EscalationChecker) stream events through
+  `EventStreamConsumer`.
+
+NOT covered here, and still owed on the L4:
+
+- **live tokens/sec across a swap** — the 3.09 GB Qwen2.5-1.5B weights could not be
+  fetched (the link ran at ~1.4 KB/s), and at 4 GB the card cannot hold the model plus
+  a concurrent verifier subprocess anyway. Re-run `make demo` on the L4 for beat 9.
+- absolute roofline numbers. `config.py`'s L4 constants (300.1 GB/s, 58 SMs) are wrong
+  for an A500, so the profiler's `memory_throughput_gbps` and `achieved_occupancy` are
+  not meaningful here. Speedup *ratios* are, since both sides are measured on the same
+  card.
+
+*Source: Task 8.*

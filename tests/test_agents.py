@@ -13,6 +13,7 @@ where a mistake is silent rather than loud:
 
 from __future__ import annotations
 
+import json
 import re
 from types import SimpleNamespace
 
@@ -36,6 +37,7 @@ from kernelsmith.agents.supervisor import build_instruction as supervisor_instru
 from kernelsmith.agents.supervisor import build_supervisor
 from kernelsmith.config import MAX_LOOP_ITERATIONS, PRIMARY_MODEL
 from kernelsmith.memory.schemas import Verdict
+from kernelsmith.tools.verifier_tool import adapter_mapping_from_draft, verifier_tool
 
 #: State keys the prompt providers interpolate. If one of these survives rendering,
 #: the provider fell back to a literal template and the agent is reading a placeholder.
@@ -366,3 +368,95 @@ def test_record_verdict_survives_a_judge_turn_with_no_tool_call():
     record_verdict(fake_ctx(state, []))
     assert state["verdict"]["reward"] == -1
     assert state["best_reward"] == -1
+
+
+# --------------------------------------------------------------------------- #
+# The deployment contract must survive the trip from Coder to verifier
+# --------------------------------------------------------------------------- #
+#
+# Both hops used to be a free-form `dict[str, str]`, and both silently produced `{}`:
+# such a dict compiles to a JSON schema with no named properties, so structured
+# generation has nothing to anchor on. Measured against gemini-3.7-flash on one prompt,
+# the dict form filled 0/3 times and a list of two-field objects filled 3/3.
+#
+# An empty contract is not an error anywhere downstream — it just falls back to the
+# hard-coded per-op adapter, i.e. the human-written bridge this project claims the agent
+# writes for itself. Every green check kept passing while the novel path never ran, so
+# these tests exist to make that failure loud.
+
+
+def test_the_verifier_tool_does_not_ask_the_model_for_the_contract():
+    """The Judge must not be able to restate, invent, or drop the mapping."""
+    schema = verifier_tool._get_declaration().parameters_json_schema
+    properties = set(schema["properties"])
+
+    assert properties == {"kernel_code", "entrypoint", "task_spec"}
+    assert "adapter_mapping" not in properties
+    assert "tool_context" not in properties
+
+
+def test_the_verifier_tool_keeps_its_published_name():
+    """`find_verifier_response` matches on it and the Judge's prompt names it."""
+    assert verifier_tool.name == "verify_kernel"
+
+
+def test_a_declared_contract_converts_to_the_form_consumers_use():
+    draft = {
+        "adapter_mapping": [
+            {"kernel_param": "weight", "module_attr": "weight"},
+            {"kernel_param": "eps", "module_attr": "variance_epsilon"},
+        ]
+    }
+    assert adapter_mapping_from_draft(draft) == {
+        "weight": "weight",
+        "eps": "variance_epsilon",
+    }
+
+
+def test_a_json_string_draft_is_parsed():
+    """`output_key` hands back raw text until the draft is parsed; both shapes arrive."""
+    draft = json.dumps(
+        {"adapter_mapping": [{"kernel_param": "eps", "module_attr": "variance_epsilon"}]}
+    )
+    assert adapter_mapping_from_draft(draft) == {"eps": "variance_epsilon"}
+
+
+def test_the_legacy_mapping_shape_still_deploys():
+    """A session or skill row written before the schema changed must not break."""
+    assert adapter_mapping_from_draft({"adapter_mapping": {"weight": "weight"}}) == {
+        "weight": "weight"
+    }
+
+
+@pytest.mark.parametrize(
+    "draft",
+    [
+        None,
+        "not json at all",
+        {},
+        {"adapter_mapping": None},
+        {"adapter_mapping": []},
+        {"adapter_mapping": "weight=weight"},
+        {"adapter_mapping": [{"kernel_param": "weight"}]},  # half an entry
+        {"adapter_mapping": ["weight"]},
+        {"adapter_mapping": [{"module_attr": "weight"}]},
+    ],
+)
+def test_an_unusable_contract_degrades_to_empty_rather_than_raising(draft):
+    """A malformed contract falls back to the per-op adapter; it never crashes the Judge."""
+    assert adapter_mapping_from_draft(draft) == {}
+
+
+def test_the_coder_is_told_to_emit_the_list_form():
+    """The prompt and the schema have to describe the same shape."""
+    from kernelsmith.agents.coder_agent import _INSTRUCTION
+
+    assert "kernel_param" in _INSTRUCTION
+    assert "module_attr" in _INSTRUCTION
+
+
+def test_the_judge_is_told_not_to_pass_the_contract():
+    """It is read from the draft; a Judge that restates it can corrupt it."""
+    from kernelsmith.agents.judge_agent import _INSTRUCTION
+
+    assert "not yours to pass" in _INSTRUCTION.lower()

@@ -189,14 +189,50 @@ def test_kernel_draft_valid():
         code="import triton\n",
         entrypoint="rmsnorm_triton",
         rationale="Memory-bound; fuse the reduction.",
+        adapter_mapping=[
+            {"kernel_param": "weight", "module_attr": "weight"},
+            {"kernel_param": "eps", "module_attr": "variance_epsilon"},
+        ],
     )
     assert draft.block_sizes == {}
+    assert draft.mapping_as_dict() == {"weight": "weight", "eps": "variance_epsilon"}
 
 
 def test_kernel_draft_rejects_missing_rationale():
     """The rationale must reference the fingerprint — it is never optional."""
     with pytest.raises(ValidationError):
-        KernelDraft(code="import triton", entrypoint="rmsnorm_triton")
+        KernelDraft(
+            code="import triton",
+            entrypoint="rmsnorm_triton",
+            adapter_mapping=[{"kernel_param": "weight", "module_attr": "weight"}],
+        )
+
+
+def test_kernel_draft_requires_a_declared_adapter_mapping():
+    """The deployment contract is the Coder's job, not a human's.
+
+    As an optional field the model omitted it on every draft, silently routing each
+    swap through the hard-coded per-op adapter — i.e. the human-written bridge this
+    system exists to eliminate. An empty dict is still accepted (the loader falls back
+    for legacy seed kernels); what is refused is not declaring the key at all.
+    """
+    with pytest.raises(ValidationError):
+        KernelDraft(
+            code="import triton",
+            entrypoint="rmsnorm_triton",
+            rationale="Memory-bound; fuse the reduction.",
+        )
+
+
+def test_kernel_draft_accepts_an_explicitly_empty_mapping():
+    """Ops with no nn.Module to bind to legitimately declare {} — explicitly."""
+    draft = KernelDraft(
+        code="import triton",
+        entrypoint="softmax_triton",
+        rationale="Memory-bound row reduction.",
+        adapter_mapping=[],
+    )
+    assert draft.mapping_as_dict() == {}
 
 
 # --------------------------------------------------------------------------- #

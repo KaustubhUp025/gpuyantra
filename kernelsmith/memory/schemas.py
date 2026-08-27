@@ -35,6 +35,26 @@ class BottleneckFingerprint(BaseModel):
         )
 
 
+class AdapterBinding(BaseModel):
+    """One entry of the deployment contract: a kernel parameter and where it comes from.
+
+    Modelled as an object with two named fields rather than a dict entry because that is
+    what structured output can actually fill in — see the note on
+    `KernelDraft.adapter_mapping`.
+    """
+
+    kernel_param: str = Field(
+        ..., description="Parameter name in the kernel wrapper, e.g. 'weight' or 'eps'"
+    )
+    module_attr: str = Field(
+        ...,
+        description=(
+            "Attribute on the target module that supplies it, e.g. 'weight' or "
+            "'variance_epsilon'. Dotted paths are allowed ('gate_proj.weight')."
+        ),
+    )
+
+
 class KernelDraft(BaseModel):
     """Output of the Coder agent. One Triton kernel attempt."""
 
@@ -46,16 +66,35 @@ class KernelDraft(BaseModel):
     rationale: str = Field(
         ..., description="Why this kernel should be faster, referencing the fingerprint"
     )
-    adapter_mapping: dict[str, str] = Field(
-        default_factory=dict,
+    # A LIST, not a dict[str, str], and that is not cosmetic. As a mapping this field
+    # produced an empty object on EVERY draft: a free-form `dict[str, str]` compiles to
+    # a JSON schema with no named properties, so structured output has nothing to
+    # anchor generation on and emits `{}`. Measured against gemini-3.7-flash on the same
+    # prompt: dict form 0/3 filled, list-of-bindings 3/3 correct.
+    #
+    # That mattered because an empty contract is not an error — it silently routes the
+    # swap through the hard-coded per-op adapter, i.e. the human-written bridge this
+    # system exists to eliminate. Every green check still passed while the novel path
+    # never ran.
+    adapter_mapping: list[AdapterBinding] = Field(
+        ...,
         description=(
-            "Deployment contract: kernel parameter name -> attribute on the module "
-            'being patched, e.g. {"weight": "weight", "eps": "variance_epsilon"}. The '
-            "forward's input tensor is implicit and must NOT appear here. Validated by "
-            "verifier.adapter_mapping before the kernel is run; empty means fall back "
-            "to the hard-coded per-op adapter."
+            "Deployment contract, REQUIRED. One entry for every wrapper parameter "
+            "AFTER the input tensor, e.g. [{'kernel_param': 'weight', 'module_attr': "
+            "'weight'}, {'kernel_param': 'eps', 'module_attr': 'variance_epsilon'}]. "
+            "The forward's input tensor is implicit and must NOT appear here. Validated "
+            "against the real module class before the kernel is ever run."
         ),
     )
+
+    def mapping_as_dict(self) -> dict[str, str]:
+        """The contract in the form every consumer downstream uses.
+
+        The list is the shape the *model* can reliably produce; `{kernel_param:
+        module_attr}` is the shape the validator, the generic adapter and `/swap` all
+        take. Conversion happens here, once, rather than at each call site.
+        """
+        return {b.kernel_param: b.module_attr for b in self.adapter_mapping}
 
 
 class Verdict(BaseModel):

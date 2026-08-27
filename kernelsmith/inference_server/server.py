@@ -28,7 +28,12 @@ The model is never `torch.compile`d: patching a compiled graph silently no-ops.
 from __future__ import annotations
 
 import asyncio
+import importlib.util
+import os
 import subprocess
+import sys
+import tempfile
+import uuid
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -387,13 +392,59 @@ def gpu_status() -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 
 
+#: Where hot-swapped kernel sources are written. Created once per server process and
+#: deliberately never cleaned up while it runs — see `_load_entrypoint`.
+_KERNEL_DIR: str | None = None
+
+
+def _kernel_dir() -> str:
+    """The process-lifetime directory holding hot-swapped kernel sources."""
+    global _KERNEL_DIR
+    if _KERNEL_DIR is None:
+        _KERNEL_DIR = tempfile.mkdtemp(prefix="kernelsmith-hotswap-")
+    return _KERNEL_DIR
+
+
 def _load_entrypoint(kernel_source: str, entrypoint: str) -> Callable:
-    """Execute verified kernel source and pull out its wrapper function."""
-    namespace: dict[str, Any] = {"__name__": "kernelsmith_hotswap_kernel"}
-    exec(compile(kernel_source, "<hotswap-kernel>", "exec"), namespace)  # noqa: S102
-    candidate = namespace.get(entrypoint)
+    """Import verified kernel source from a real file and pull out its wrapper function.
+
+    It has to be a real file on disk, not `exec(compile(source, "<string>", ...))`:
+    `@triton.jit` calls `inspect.getsourcelines` on the decorated function at decoration
+    time and raises `ValueError: @jit functions should be defined in a Python file` when
+    it cannot find one. Since every kernel this system produces is a Triton kernel, an
+    in-memory exec fails 100% of hot-swaps — and fails them as a refused `/swap` with a
+    load error, which reads like a bad kernel rather than a broken loader. The verifier's
+    sandbox already loads candidates this way; this is the same mechanism.
+
+    The file is NOT deleted afterwards. Triton compiles lazily on the first call and
+    re-reads the source when it specializes for a new shape or dtype, so deleting it at
+    the end of this function would move the failure from swap time to first-token time.
+    The directory is a per-process temp dir and goes away with the process.
+
+    Raises:
+        AttributeError: `entrypoint` is not a callable defined in the source.
+    """
+    module_name = f"kernelsmith_hotswap_{uuid.uuid4().hex}"
+    path = os.path.join(_kernel_dir(), f"{module_name}.py")
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(kernel_source)
+
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"could not build an import spec for {path}")
+    module = importlib.util.module_from_spec(spec)
+    # Registered before exec so `inspect` (and therefore Triton) can resolve the module
+    # while the @jit decorators at its top level are still running.
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(module_name, None)
+        raise
+
+    candidate = getattr(module, entrypoint, None)
     if not callable(candidate):
-        defined = ", ".join(n for n in namespace if not n.startswith("_"))
+        defined = ", ".join(n for n in vars(module) if not n.startswith("_"))
         raise AttributeError(f"{entrypoint!r} is not a callable in the kernel; defined: {defined}")
     return candidate
 

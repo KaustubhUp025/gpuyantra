@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import os
+import sys
 
 import pytest
 import torch
@@ -643,3 +645,111 @@ def _load(source: str):
 def _rms(x: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
     var = x.to(torch.float32).pow(2).mean(-1, keepdim=True)
     return (x.to(torch.float32) * torch.rsqrt(var + eps)).to(x.dtype)
+
+
+# --------------------------------------------------------------------------- #
+# Loading the kernel source — the Triton-shaped hole in everything above
+# --------------------------------------------------------------------------- #
+#
+# Every other test in this file uses a pure-torch stand-in kernel, which is the right
+# call for testing rebind/parity/rollback without a GPU. But it left `_load_entrypoint`
+# covered only for the one kind of kernel this system never actually produces.
+#
+# `@triton.jit` calls `inspect.getsourcelines` on the decorated function at DECORATION
+# time. Loading the source with `exec(compile(src, "<string>", "exec"))` gives it no
+# file to find, so it raises `ValueError: @jit functions should be defined in a Python
+# file` — for every Triton kernel, which is all of them. The server turns that into a
+# refused swap with a load error, so the symptom reads like a bad kernel rather than a
+# broken loader, and the demo's hot-swap simply never fires.
+#
+# These need no GPU: decoration is what fails, and decoration never touches the device.
+
+TRITON_KERNEL = """
+import torch
+import triton
+import triton.language as tl
+
+
+@triton.jit
+def _scale_kernel(X, Y, N, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(0)
+    cols = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = cols < N
+    x = tl.load(X + cols, mask=mask, other=0.0)
+    tl.store(Y + cols, x * 2.0, mask=mask)
+
+
+def scale_entry(x, weight, eps):
+    y = torch.empty_like(x)
+    n = x.numel()
+    _scale_kernel[(triton.cdiv(n, 1024),)](x, y, n, BLOCK_SIZE=1024)
+    return y
+"""
+
+
+def test_a_triton_kernel_can_be_loaded_at_all():
+    """The regression guard: `@triton.jit` needs a real file on disk, not a string."""
+    entry = server._load_entrypoint(TRITON_KERNEL, "scale_entry")
+    assert callable(entry)
+    assert entry.__name__ == "scale_entry"
+
+
+def test_the_loaded_kernel_module_is_backed_by_a_readable_file():
+    """Triton re-reads the source when it specializes, so the file must outlive the load."""
+    entry = server._load_entrypoint(TRITON_KERNEL, "scale_entry")
+    source_file = inspect.getsourcefile(entry)
+
+    assert source_file is not None
+    assert os.path.exists(source_file), "the kernel source was deleted after loading"
+    with open(source_file, encoding="utf-8") as handle:
+        assert "def scale_entry" in handle.read()
+
+    # And `inspect` must be able to reach the @jit function itself — that is the exact
+    # call Triton makes, and the one that used to raise.
+    jit_fn = sys.modules[entry.__module__]._scale_kernel
+    assert "def _scale_kernel" in "".join(inspect.getsourcelines(jit_fn.fn)[0])
+
+
+def test_two_loads_do_not_collide():
+    """Successive swaps must not overwrite each other's module or source file."""
+    first = server._load_entrypoint(TRITON_KERNEL, "scale_entry")
+    second = server._load_entrypoint(TRITON_KERNEL, "scale_entry")
+
+    assert first.__module__ != second.__module__
+    assert inspect.getsourcefile(first) != inspect.getsourcefile(second)
+
+
+def test_a_missing_entrypoint_still_names_what_was_defined():
+    """The error a Coder sees must say what it DID define, not just what was missing."""
+    with pytest.raises(AttributeError) as excinfo:
+        server._load_entrypoint(TRITON_KERNEL, "not_the_entrypoint")
+
+    message = str(excinfo.value)
+    assert "not_the_entrypoint" in message
+    assert "scale_entry" in message
+
+
+def test_a_kernel_that_raises_on_import_does_not_leave_a_module_behind():
+    """A half-imported module in `sys.modules` would poison the next load of that name."""
+    before = set(sys.modules)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        server._load_entrypoint("raise RuntimeError('boom')", "anything")
+
+    leaked = {n for n in set(sys.modules) - before if n.startswith("kernelsmith_hotswap_")}
+    assert not leaked, f"left behind {leaked}"
+
+
+def test_apply_swap_reports_a_triton_load_failure_as_a_refusal(monkeypatch):
+    """A loader that throws must refuse the swap, never take the model down with it."""
+    model = DummyModel()
+
+    monkeypatch.setattr(
+        server,
+        "_load_entrypoint",
+        lambda *a, **k: (_ for _ in ()).throw(ValueError("@jit functions should be defined")),
+    )
+    result = apply_swap(model, "rmsnorm", TRITON_KERNEL, "scale_entry")
+
+    assert result["success"] is False
+    assert "could not load entrypoint" in result["error"]
