@@ -50,13 +50,21 @@ def _cuda_is_available() -> bool:
 
 
 def _credentials_are_available() -> bool:
-    """ADC or an explicit service account, plus the project id config.py demands."""
+    """ADC, explicit service account, or Compute Engine metadata server."""
     if not os.environ.get("GOOGLE_CLOUD_PROJECT"):
         return False
     if os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
         return True
     adc = os.path.expanduser("~/.config/gcloud/application_default_credentials.json")
-    return os.path.exists(adc)
+    if os.path.exists(adc):
+        return True
+    # Compute Engine VMs use the metadata server — google.auth.default() finds it
+    try:
+        from google.auth import default
+        creds, _ = default()
+        return creds is not None
+    except Exception:
+        return False
 
 
 #: Spec 13.2: budget cap. This is a cap, not a removal — red line #4 forbids a
