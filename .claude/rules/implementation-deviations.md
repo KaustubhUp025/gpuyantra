@@ -522,37 +522,39 @@ an LLM has to fill.** Use a list of objects with named fields.
 
 ---
 
-## Task 8 validated on an RTX A500 (4 GB), not an L4 — what that does and does not cover
+## What Task 8 is validated on, and the one thing that still is not
 
-Task 8 ran on a laptop RTX A500 Laptop GPU (4096 MiB, driver 580.173.02, CUDA 13.0,
-Python 3.12.12, torch 2.12.1+cu130), not the g2-standard-4 L4 the spec targets.
+The Task 8 work was authored on a dev box with an RTX A500 (4 GB) and re-run unchanged
+on the L4 VM. Both runs collect and pass the **same 329 tests**, including all 18
+integration tests against live `gemini-3.7-flash`, Firestore and the GPU — on Python
+3.12.12 / torch 2.12.1+cu130 locally and Python 3.14.7 on the VM. Nothing in Task 8
+turned out to be hardware-contingent, so this is a note about coverage, not a caveat on
+the code.
 
-Fully validated here, and hardware-independent:
+What both runs cover:
 
-- the verifier end to end — 15/15 correctness checks, reward +3, 6.92x / 1.36x;
-- the whole agent tree over live `gemini-3.7-flash` (16 integration tests);
-- Firestore vector retrieval, the UCB1 bandit, and the composite index;
-- the generic adapter on **real `Qwen2RMSNorm` modules**: contract validates, the
-  generic path is taken rather than the fallback (asserted on `__qualname__`), parity
-  holds at atol=1e-2, rollback is bitwise-exact, 6.90x on a 4-layer stack;
-- the real Qwen2 architecture's attribute names, read from `AutoConfig` +
-  `from_config` on a meta device: `weight` [1536], `variance_epsilon` 1e-06,
-  **57 `Qwen2RMSNorm` modules** — matching the Aug 26 VM smoke test exactly;
-- the dashboard: renders with no exceptions via `AppTest`, and all five agents
-  (Supervisor, Profiler, Coder, Judge, EscalationChecker) stream events through
-  `EventStreamConsumer`.
+- the verifier end to end — 15/15 correctness checks, reward +3, 6.92x vs eager and
+  1.36x vs torch.compile after the fairness fix;
+- the whole agent tree, budget-capped at `max_iterations=2`;
+- Firestore vector retrieval, the composite index, and the UCB1 bandit;
+- the generic adapter against **real `Qwen2RMSNorm` modules**: the declared contract
+  validates, the generic path is taken rather than the per-op fallback (asserted on
+  `__qualname__`), parity holds at atol=1e-2, rollback is bitwise-exact;
+- the real Qwen2 attribute names — `weight` [1536], `variance_epsilon` 1e-06, 57
+  `Qwen2RMSNorm` modules — matching the Aug 26 VM smoke test;
+- the dashboard renders without exception, and all five agents stream events.
 
-NOT covered here, and still owed on the L4:
+**Still not validated anywhere: live tokens/sec across a hot-swap (demo beat 9.)**
+No `run_demo` has ever completed — the `runs` collection in Firestore is empty, and no
+VM session has run `make demo`, the inference server, or a live `/swap`. The pieces
+underneath it are individually verified (the swap mechanism, parity, rollback, the
+adapter, `TokenMeter` clearing its window), but the end-to-end throughput jump the demo
+is built around has not been observed on a served model.
 
-- **live tokens/sec across a swap** — the 3.09 GB Qwen2.5-1.5B weights could not be
-  fetched (the link ran at ~1.4 KB/s), and at 4 GB the card cannot hold the model plus
-  a concurrent verifier subprocess anyway. Re-run `make demo` on the L4 for beat 9.
-- absolute roofline numbers. `config.py`'s L4 constants (300.1 GB/s, 58 SMs) are wrong
-  for an A500, so the profiler's `memory_throughput_gbps` and `achieved_occupancy` are
-  not meaningful here. Speedup *ratios* are, since both sides are measured on the same
-  card.
+This is the one open item before recording. Run `make demo` on the L4 and check that the
+`runs` record lands with a non-empty `hotswap_result`.
 
-*Source: Task 8.*
+*Source: Task 8, dev box Aug 27; VM re-run Aug 27 (18/18 integration, 329 total).*
 
 ---
 
