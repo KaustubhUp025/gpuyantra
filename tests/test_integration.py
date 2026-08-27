@@ -61,6 +61,7 @@ def _credentials_are_available() -> bool:
     # Compute Engine VMs use the metadata server — google.auth.default() finds it
     try:
         from google.auth import default
+
         creds, _ = default()
         return creds is not None
     except Exception:

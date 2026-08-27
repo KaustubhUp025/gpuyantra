@@ -553,3 +553,42 @@ NOT covered here, and still owed on the L4:
   card.
 
 *Source: Task 8.*
+
+---
+
+## `GOOGLE_GENAI_USE_VERTEXAI` is deprecated in favour of `GOOGLE_GENAI_USE_ENTERPRISE`
+
+ADK 2.7.1 warns on every run: "GOOGLE_GENAI_USE_VERTEXAI is deprecated, please use
+GOOGLE_GENAI_USE_ENTERPRISE instead". Verified in
+`google/adk/utils/env_utils.py::is_enterprise_mode_enabled` — `GOOGLE_GENAI_USE_ENTERPRISE`
+is checked first and wins; the old name still works and only then warns.
+`google/genai/_api_client.py` honours both the same way, and warns separately if the two
+are set to *conflicting* values.
+
+Currently set as the old name in `.env`, `.env.example` and `tests/conftest.py`. The
+switch is safe whenever someone wants the warning gone — nothing in this repo depends on
+the old name, because `embeddings.py` and `explainer_tool.py` both construct
+`genai.Client(vertexai=True, ...)` explicitly rather than relying on the environment.
+
+Not changed yet: the old flag still works, and `.env` lives only on the VM where it
+cannot be edited from a dev box. If you switch, switch all three together, or leave both
+set to the same value — mismatched values are the one case that actually misbehaves.
+
+*Source: Task 8 integration warnings, verified against the ADK 2.7.1 source.*
+
+---
+
+## The integration credential guard must recognize the Compute Engine metadata server
+
+`_credentials_are_available()` in `tests/test_integration.py` checked only
+`GOOGLE_APPLICATION_CREDENTIALS` and the ADC file at
+`~/.config/gcloud/application_default_credentials.json`. On a Compute Engine VM neither
+exists — credentials come from the metadata server. The guard therefore skipped the
+entire integration module on the one machine it was written to run on, and skipping
+reads as green.
+
+Fixed with a third check that falls through to `google.auth.default()` and treats
+non-None credentials as available, wrapped in `try/except` so a machine with no
+credentials at all still skips rather than errors.
+
+*Source: VM integration run, Aug 27. Fix authored on the VM (commit 8a230db).*
