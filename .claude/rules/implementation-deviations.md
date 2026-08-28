@@ -748,6 +748,191 @@ analytic estimates and labels the results "estimated" in the report.
 
 ---
 
+## CPU-mode audit builds the tree from `config.json` on the meta device, not from weights
+(implements the CPU-mode note above)
+
+The spec says "load model with `AutoModel.from_pretrained()`... for cpu use
+`dtype=torch.float32`". Implemented differently on the CPU path, deliberately.
+
+The audit reads `in_features`, `normalized_shape` and parameter SHAPES. It never runs a
+forward pass on CPU, so it does not need the weights — and downloading 3.4 GB of them to
+count 57 RMSNorms makes `make audit` unusable on a laptop and impossible offline. The
+dev box proved the point: the HF cache held Qwen2.5-1.5B's `config.json` and an
+`.incomplete` weight blob, and `from_pretrained` died with `AttributeError: 'NoneType'
+object has no attribute 'endswith'`.
+
+`_load_for_audit()` therefore does, on CPU:
+
+    config = AutoConfig.from_pretrained(hf_id)      # ~1 KB
+    with torch.device("meta"):
+        AutoModel.from_config(config).eval()
+
+0.11 s, zero bytes allocated, and the module tree is EXACT — 369 modules, 57
+`Qwen2RMSNorm`, `weight` [1536], matching the Aug 26 VM smoke test. Same trick
+`verifier/adapter_mapping._probe_instance` already uses. If config-only construction
+fails for an architecture, it falls back to a real `from_pretrained` rather than giving
+up on the audit.
+
+On CUDA the weights ARE loaded, because `do_bench` cannot time a meta tensor.
+`AuditReport.weights_loaded` records which path ran and the report prints it.
+
+*Source: Task 10, dev box Aug 28.*
+
+---
+
+## Two FLOP/byte estimators now coexist, and they disagree on purpose
+
+`analytic_counts` (existing, §7) counts the MINIMUM traffic a fused kernel must move:
+read each input once, write the output once. Norm = 5 flop/elem over 2 tensors. It is the
+retrieval fingerprint's estimator and must describe the OP, not an implementation.
+
+`estimate_flops_and_bytes` (new, Task 10 Part B) counts traffic PER TENSOR TOUCHED,
+including a weight and bias read per row and a Linear's whole weight matrix. Norm = 5 over
+3 tensors, LayerNorm = 7 over 4. It is the audit's estimator, and it deliberately
+describes what an UNFUSED eager implementation actually moves — which is the headroom a
+kernel can recover, i.e. the number a triage table is asked for.
+
+So the same RMSNorm reads AI 1.25 through one and 0.83 through the other (fp16). Both put
+it two orders of magnitude below the ridge point, which is the only question either is
+asked. **Where they differ numerically, `analytic_counts` is the one wired to Firestore.**
+Do not "reconcile" them.
+
+*Source: Task 10.*
+
+---
+
+## `classify_op_family` takes a CALLABLE; `family_from_name` takes a string
+
+`classify_op_family("RMSNorm")` returns **"elementwise"**, silently. It reads names off
+the object it is given, and for a `str` the only candidate is `type(x).__name__` == `str`,
+which matches no keyword, so it falls through to the conservative default.
+
+Two Task 10 call sites needed a family from a NAME rather than from a callable — the
+audit's module class name (`"LayerNorm"`), and `MODEL_REGISTRY[...]["norm_type"]`. Both
+got "elementwise", which would have made the dashboard's transfer-readiness table report
+every model as a cold start and pointed `demonstrate_cross_model_transfer` at the wrong
+`op_family` pre-filter: a demo that quietly claims transfer does not work.
+
+The name-based classifier already existed as the private `_family_from_name`. It is now
+public as **`family_from_name`**, with the trap documented on both functions. Anything
+holding a name rather than a callable must use it.
+
+Caught by `test_every_norm_type_classifies_into_the_retrieval_family_norm` in
+`tests/test_model_registry.py`, which is why that test exists.
+
+*Source: Task 10.*
+
+---
+
+## The audit reports `n/a`, never a fabricated zero, and names the GPU it measured on
+
+Two honesty rules in `format_audit_report`, both instances of red line #3.
+
+**Unestimated is not zero.** A module the estimator does not recognize (an embedding
+gather, a dropout, a pooling layer) gets `(0, 0)` and `arithmetic_intensity = 0.0`.
+`AuditEntry.bottleneck` still says `"memory"` — the conservative default, matching
+`fallback_fingerprint` — but the table prints `—` in the Regime column and `n/a` for AI
+and BW, because a regime nobody computed must not be displayed as one that was. Such
+entries are also forced to priority LOW: AI 0.0 is an absence of information, not a
+bottleneck, and without that rule every dropout in GPT-2 ranks as a MEDIUM target.
+
+**`BW %` is a fraction of the L4's 300 GB/s.** Measured on any other GPU that denominator
+is wrong. `AuditReport.gpu_name` records the device and the mode line appends
+"⚠ measured on <GPU>, but BW % is against the L4's 300 GB/s — not comparable to an L4
+run" whenever the name does not contain "L4". Observed on the dev box: GPT-2's LayerNorm
+reported 39% on an RTX A500, which is ~104% of that card's actual bandwidth.
+
+*Source: Task 10.*
+
+---
+
+## transformers' `Conv1D` is a Linear, and getting that wrong mis-called GPT-2's bottleneck
+
+GPT-2's q/k/v and MLP projections are `transformers.pytorch_utils.Conv1D` — a Linear with
+its weight stored transposed as `[in, out]`, not a convolution. Classified by name it
+matched nothing, so all 48 of them returned `(0, 0)`, and the composite sum that gives
+`GPT2Block` its intensity was left with only the LayerNorms and the GELU. The audit
+therefore reported **GPT2Block and GPT2MLP as memory-bound** when GPT-2's arithmetic is
+entirely in those 48 modules.
+
+Fixed by recognizing the `nf` attribute (which only Conv1D carries) as "linear", and by
+falling back to `weight.shape` in `_linear_counts` when `in_features`/`out_features` are
+absent. The order does not matter: both `2*B*M*N` and `B*M + M*N + B*N` are symmetric in
+(M, N), so one fallback covers Linear's `[out, in]` and Conv1D's `[in, out]`.
+
+After: Conv1D 271, GPT2Attention 256, GPT2MLP 256, GPT2Block 210 FLOP/byte — all
+compute-bound, with LayerNorm (0.88, 25 instances) the top target. Which is the correct
+story for GPT-2.
+
+*Source: Task 10, dev box Aug 28.*
+
+---
+
+## Container modules are excluded from the audit; composite blocks are not
+
+`named_modules()` yields the root and every container. Neither `ModuleList` nor "the whole
+model" is a swappable target, so the root and `_STRUCTURAL_CONTAINERS` (ModuleList,
+ModuleDict, Sequential, ParameterList/Dict) are dropped, and `AuditReport.total_modules`
+counts only what made the table — so the header agrees with the rows rather than with
+`len(list(model.named_modules()))`.
+
+Composite blocks (`Qwen2MLP`, `GPT2Block`, `ResNetStage`) ARE reported, estimated as the
+sum of their children at each child's own derived probe shape. A fusable block is a real
+target — `PATCHABLE_OPS` already knows how to swap `Qwen2MLP` — and without the sum they
+would show AI 0.0 and rank LOW for the wrong reason. Known weakness, stated in the code: a
+child whose width depends on a sibling's output (the activation between an MLP's up- and
+down-projection runs at the intermediate width) is estimated at the parent's input shape
+and understated. It does not move a composite across the ridge point.
+
+One representative instance per CLASS, so a `Linear` row describes whichever projection
+was met first, not an average over all 196. Right for triage (the regime is the same for
+all of them), but the AI in that row is one instance's.
+
+*Source: Task 10.*
+
+---
+
+## The dashboard auto-refresh ticks only on Optimize, and `drive_run` runs on every tab
+
+Two halves of one constraint, and the second is load-bearing for the hot-swap.
+
+The 1 Hz whole-script rerun would restart an in-progress audit forever, and the two new
+read-only tabs have nothing to poll. So `render_autorefresh()` is called only when the
+Optimize tab is showing **or a run is in flight** — the second clause matters, because a
+run still needs ticks to reach turn 2 while the operator is looking at another tab.
+
+`ingest_events()` and `drive_run()` are called BEFORE the tab dispatch returns, on every
+tab. Moving them below the `return`s would break the two-message protocol — turn 2 never
+sent, upsert and hot-swap silently skipped — while leaving every panel looking healthy.
+`test_the_run_driver_is_called_on_every_tab_not_only_on_optimize` in
+`tests/test_dashboard_tabs.py` asserts the ordering in the source, because reproducing it
+for real needs Vertex, a GPU and a live server.
+
+`tests/test_dashboard_tabs.py` is also the first automated check that the dashboard
+renders at all (via `streamlit.testing.v1.AppTest`); until now that was verified by
+opening it.
+
+*Source: Task 10.*
+
+---
+
+## Transfer readiness joins on `(op_family, hardware)`, never on the model
+
+The Skill Library tab's readiness table, and `demonstrate_cross_model_transfer`, both join
+exactly the way `retrieve_skills` pre-filters: on `op_family` and `hardware`. Joining on
+the model or the op name would make the table agree with itself while describing
+something retrieval does not do.
+
+Confirmed live against the real library on Aug 28: GPT-2's LayerNorm fingerprint
+(`op=norm mem_bound=True ai=0.4 tile=1024 hw=L4`) retrieved all three Qwen2.5 RMSNorm
+skills, nearest at vector distance 0.0128. `tests/test_cross_model.py` locks the query
+shape down with a fake that HONOURS its recorded pre-filters, so a dropped filter cannot
+pass as a match, and asserts that no model or op name leaks into the embedded text.
+
+*Source: Task 10, live Firestore Aug 28.*
+
+---
+
 ## LayerNorm added to OP_REGISTRY and PATCHABLE_OPS (extends §8.3, Task 10)
 
 `torch.nn.LayerNorm` IS an `nn.Module` and CAN be discovered via `named_modules()`.
@@ -762,6 +947,57 @@ because the Coder declares the full mapping.
 
 Constructor for meta-device validation:
 `torch.nn.LayerNorm(normalized_shape=hidden_size, device=torch.device("meta"))`
+
+*Source: Task 10.*
+
+---
+
+## What LayerNorm actually needed, as implemented (corrects the section above)
+
+`OP_REGISTRY` **already had** `layernorm` (`_build_layernorm`, binding
+`entry(x, weight, bias, eps)`, eps 1e-5, reduction in fp32). Three things were genuinely
+missing, and one line of the section above is wrong:
+
+1. `PATCHABLE_OPS["layernorm"] = {"class_name": "LayerNorm", "priority": 0}` — same
+   priority as `rmsnorm`, because whichever norm the architecture uses is the P0 target.
+   Matched as a class-name substring like every other entry, so a `FusedLayerNorm`
+   subclass matches too. On Qwen2 it correctly matches nothing (`Qwen2RMSNorm` does not
+   contain "LayerNorm") and `/swap` refuses with "no module whose class name contains
+   'LayerNorm'".
+2. `_OP_MODULES["layernorm"]` in `verifier/adapter_mapping.py`, which is what takes it
+   off the reject list. `_probe_instance` used to branch on `class_name == "Qwen2RMSNorm"`
+   and otherwise assume a `Qwen2Config`; each entry now carries its own `build` callable
+   instead, so adding an op no longer means editing that function.
+3. `_layernorm_adapter` as the hard-coded fallback.
+
+**The fallback adapter passes `(weight, bias, eps)` and NOT `normalized_shape`**, contrary
+to the section above. It has to match the signature the verifier benched the kernel
+against — `entry(x, weight, bias, eps)` — and adding a fourth argument the verified
+wrapper never accepted would break every seed kernel. `normalized_shape` validates fine
+as a declared binding and reaches a kernel that asks for it through the generic adapter;
+`test_the_fallback_adapter_does_not_pass_normalized_shape` pins the arity.
+
+`eps` vs `variance_epsilon` is the concrete reason one shared norm adapter was never
+going to work, and `validate_adapter_mapping("layernorm", {"eps": "variance_epsilon"})`
+now rejects it at validation time rather than as an `AttributeError` inside a hot forward.
+
+*Source: Task 10.*
+
+---
+
+## New config constants for the audit (adds to §0, Task 10)
+
+Beyond the specified `AUDIT_REPORT_WIDTH = 80`: `DEFAULT_AUDIT_MODEL = "qwen2.5-1.5b"`
+(asserted equal to `SERVED_MODEL`, so `make audit` audits the model the server runs), and
+the probe shapes the analytic estimates are taken at — `AUDIT_PROBE_BATCH = 1`,
+`AUDIT_PROBE_SEQ = 512`, `AUDIT_PROBE_SPATIAL = 56` (ResNet-50's stage-1 feature map).
+They place a module on the roofline; they are not the shapes the model is served at, and
+in CPU mode nothing is allocated from them. CLAUDE.md: every magic number lives in
+config.py.
+
+The table renders at exactly `AUDIT_REPORT_WIDTH` — the first column absorbs the
+remainder after the borders and the five fixed columns, so changing the constant cannot
+break the box-drawing alignment. Asserted in `tests/test_audit.py`.
 
 *Source: Task 10.*
 
@@ -791,3 +1027,32 @@ during optimization (waste of VRAM).
 - Default (no subcommand): `optimize` — so `make demo` is backward compatible.
 
 *Source: Task 10.*
+
+---
+
+## What Task 10 is validated on
+
+Dev box (RTX A500, Python 3.12.12, torch 2.12.1+cu130), Aug 28. **449 unit tests pass**
+(up from 317) plus the 18 integration tests unchanged; `make lint` clean.
+
+Verified by running it, not by inspection:
+
+- `make audit` and `make audit-all` on all three registered models, CPU mode. Top target
+  is the model's own normalization every time — `Qwen2RMSNorm` (57), `LayerNorm` (25),
+  `BatchNorm2d` (53) — and the comparison table puts the three side by side. The Qwen2
+  numbers match the Aug 26 VM smoke test exactly (369 modules, 57 RMSNorms, weight [1536]).
+- `audit --device cuda` on GPT-2 with real weights: `do_bench` measured, LayerNorm at 39%
+  of the L4's quoted bandwidth, with the off-L4 warning printed.
+- `audit --output json` round-trips through `json.load`.
+- Cross-model transfer against the **live** Firestore library: GPT-2's LayerNorm
+  fingerprint retrieved all three Qwen2.5 RMSNorm skills, nearest at distance 0.0128.
+- All three dashboard tabs via `AppTest`, including a real audit run from the Audit tab
+  and the live skill library and transfer-readiness tables in the Library tab.
+- `make demo`'s argv (`--no-server`, `--op`, bare) still parses to `optimize`.
+
+**Not validated:** `run_full` end to end (its `optimize` leg is a full Vertex + GPU run;
+that leg is unchanged from Task 9 and covered by the Task 9 note above), and no audit has
+been run on the L4 itself — the CPU-mode numbers are hardware-independent by construction,
+but the CUDA-mode `BW %` column has only ever been measured on an RTX A500.
+
+*Source: Task 10, dev box Aug 28.*

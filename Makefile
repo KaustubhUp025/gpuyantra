@@ -1,5 +1,6 @@
-.PHONY: setup demo test test-unit test-int lint format seed-skill create-index \
-        serve-inference serve-ui harden unharden check-harden export-firestore
+.PHONY: setup demo audit audit-all test test-unit test-int lint format seed-skill \
+        create-index serve-inference serve-ui harden unharden check-harden \
+        export-firestore
 
 # --- One-command setup (README "Quick start") -------------------------------
 # `uv sync --frozen` refuses to re-resolve: a fresh L4 gets the exact transitive
@@ -26,6 +27,19 @@ DEMO_ARGS ?=
 demo:
 	@echo "=== KernelSmith Demo ==="
 	CUBLAS_WORKSPACE_CONFIG=:4096:8 uv run python -m kernelsmith.run_demo $(DEMO_ARGS)
+
+# --- Audit (spec 7) ---------------------------------------------------------
+# Reads the model tree, not the weights: on CPU the audit builds every module from
+# config.json on the meta device, so `make audit` needs neither a GPU nor a 3 GB
+# download. AUDIT_ARGS reaches the subcommand:
+#   make audit AUDIT_ARGS="--model gpt2 --device cuda"
+AUDIT_ARGS ?=
+
+audit:
+	GOOGLE_CLOUD_PROJECT=gpuyantra uv run python -m kernelsmith.run_demo audit $(AUDIT_ARGS)
+
+audit-all:
+	GOOGLE_CLOUD_PROJECT=gpuyantra uv run python -m kernelsmith.run_demo audit --all $(AUDIT_ARGS)
 
 test-unit:
 	uv run pytest tests/ -k "not integration and not chaos" -v --tb=short

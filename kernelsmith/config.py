@@ -69,3 +69,50 @@ PROFILER_FALLBACK_OCCUPANCY = 0.5  # Fallback occupancy, deliberately uninformat
 GLOBAL_SEED = 42
 DETERMINISTIC_CUDA = True  # torch.use_deterministic_algorithms(True)
 CUBLAS_WORKSPACE = ":4096:8"  # CUBLAS_WORKSPACE_CONFIG env var
+
+# --- Multi-model audit (spec 7, Task 10) ------------------------------------
+# The architecture was always general — the fingerprint is a bottleneck, not an op name,
+# and the deployment contract is generated per module. MODEL_REGISTRY is what makes that
+# generality checkable: three architecturally different models, so "it works on RMSNorm"
+# cannot be mistaken for "it works on Qwen2".
+#
+# All three are ungated (MIT / Apache-2.0, no license click-through), because an audit
+# that stops to ask for a HuggingFace token is an audit nobody runs. Total FP16 footprint
+# is ~3.4 GB, but they are loaded ONE AT A TIME: profiling needs the module tree, not
+# three models resident at once.
+MODEL_REGISTRY: dict[str, dict[str, object]] = {
+    "qwen2.5-1.5b": {
+        "hf_id": "Qwen/Qwen2.5-1.5B-Instruct",
+        "family": "decoder",
+        "norm_type": "RMSNorm",
+        "activation": "SiLU",
+        "hidden_size": 1536,
+        "description": "Modern decoder (GQA, RoPE, SwiGLU, RMSNorm)",
+    },
+    "gpt2": {
+        "hf_id": "openai-community/gpt2",
+        "family": "decoder",
+        "norm_type": "LayerNorm",
+        "activation": "GELU",
+        "hidden_size": 768,
+        "description": "Classic decoder (MHA, learned pos, GELU, LayerNorm)",
+    },
+    "resnet50": {
+        "hf_id": "microsoft/resnet-50",
+        "family": "vision",
+        "norm_type": "BatchNorm",
+        "activation": "ReLU",
+        "hidden_size": 2048,
+        "description": "Vision classifier (BatchNorm, ReLU, residual blocks)",
+    },
+}
+
+DEFAULT_AUDIT_MODEL = "qwen2.5-1.5b"  # The served model; `make audit` with no --model
+AUDIT_REPORT_WIDTH = 80  # Total width of the ASCII audit table, borders included
+
+# Probe shapes for the audit's analytic FLOP/byte estimates. They place a module on the
+# roofline; they are not the shapes the model is served at, and nothing is allocated
+# from them in CPU mode.
+AUDIT_PROBE_BATCH = 1
+AUDIT_PROBE_SEQ = 512  # tokens per sequence for sequence-shaped modules
+AUDIT_PROBE_SPATIAL = 56  # HxW for conv / BatchNorm2d; ResNet-50's stage-1 feature map

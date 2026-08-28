@@ -228,16 +228,24 @@ def test_build_forward_rejects_an_unknown_op():
         build_forward("attention", _load(GOOD_KERNEL))
 
 
-def test_registry_lists_the_three_patch_targets():
+def test_registry_lists_every_patch_target_with_its_class_name():
     assert resolve_class_name("rmsnorm") == "Qwen2RMSNorm"
+    assert resolve_class_name("layernorm") == "LayerNorm"
     assert resolve_class_name("swiglu") == "Qwen2MLP"
-    assert [
-        name for name, _ in sorted(PATCHABLE_OPS.items(), key=lambda kv: kv[1]["priority"])
-    ] == [
-        "rmsnorm",
-        "swiglu",
-        "rope",
-    ]
+    assert set(PATCHABLE_OPS) == {"rmsnorm", "layernorm", "swiglu", "rope"}
+
+
+def test_both_normalizations_are_priority_zero_and_rope_is_last():
+    """Whichever norm the architecture uses is the P0 target — RMSNorm or LayerNorm.
+
+    Asserted as priority BANDS rather than one exact ordering, so adding a fifth op
+    fails only if it is given a priority that contradicts the demo order.
+    """
+    priorities = {name: spec["priority"] for name, spec in PATCHABLE_OPS.items()}
+
+    assert priorities["rmsnorm"] == priorities["layernorm"] == 0
+    assert priorities["swiglu"] == 1
+    assert priorities["rope"] == max(priorities.values())
 
 
 # --------------------------------------------------------------- parity gate

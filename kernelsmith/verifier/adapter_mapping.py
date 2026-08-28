@@ -34,22 +34,45 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-#: Normalized op name -> the transformers module class the kernel will be bound to,
-#: plus the attributes we know it carries. `probe` builds a meta-device instance.
+
+def _build_qwen2_mlp_probe(cls: Any) -> Any:
+    """Qwen2MLP takes a config, not a hidden size. Tiny values: nothing is allocated."""
+    from transformers.models.qwen2.configuration_qwen2 import Qwen2Config
+
+    return cls(Qwen2Config(hidden_size=64, intermediate_size=128))
+
+
+#: Normalized op name -> the module class the kernel will be bound to, plus the
+#: attributes we know it carries and how to build a meta-device instance of it.
 #:
-#: Ops absent from this table (softmax, silu, rope, layernorm) have no `nn.Module` in
-#: Qwen2 to patch — "rope" is a module-level function (see `patchable_ops`) — so a
-#: mapping for them cannot be validated OR deployed, and is rejected as such.
+#: Ops absent from this table (softmax, silu, rope) have no `nn.Module` to patch —
+#: "rope" is a module-level function (see `patchable_ops`) — so a mapping for them
+#: cannot be validated OR deployed, and is rejected as such.
+#:
+#: "layernorm" used to be in that reject list and should not have been:
+#: `torch.nn.LayerNorm` is an ordinary `nn.Module`, discoverable through
+#: `named_modules()` and swappable by exactly the mechanism RMSNorm uses. It was lumped
+#: in with `apply_rotary_pos_emb` on the strength of the name alone. Fixing that is what
+#: lets the system optimize GPT-2's normalization layers (Task 10).
 _OP_MODULES: dict[str, dict[str, Any]] = {
     "rmsnorm": {
         "module": "transformers.models.qwen2.modeling_qwen2",
         "class_name": "Qwen2RMSNorm",
+        "build": lambda cls: cls(64),
         # Fallback only, used when the meta-device probe cannot be built.
         "known_attrs": frozenset({"weight", "variance_epsilon"}),
+    },
+    "layernorm": {
+        "module": "torch.nn",
+        "class_name": "LayerNorm",
+        # normalized_shape is the one required argument; affine params come with it.
+        "build": lambda cls: cls(64),
+        "known_attrs": frozenset({"weight", "bias", "eps", "normalized_shape"}),
     },
     "mlp": {
         "module": "transformers.models.qwen2.modeling_qwen2",
         "class_name": "Qwen2MLP",
+        "build": _build_qwen2_mlp_probe,
         "known_attrs": frozenset(
             {"gate_proj", "up_proj", "down_proj", "act_fn", "hidden_size", "intermediate_size"}
         ),
@@ -206,10 +229,6 @@ def _probe_instance(spec: dict[str, Any]) -> Any:
 
         cls = getattr(importlib.import_module(spec["module"]), spec["class_name"])
         with torch.device("meta"):
-            if spec["class_name"] == "Qwen2RMSNorm":
-                return cls(64)
-            from transformers.models.qwen2.configuration_qwen2 import Qwen2Config
-
-            return cls(Qwen2Config(hidden_size=64, intermediate_size=128))
+            return spec["build"](cls)
     except Exception:  # noqa: BLE001 — a missing probe degrades the check, never blocks
         return None

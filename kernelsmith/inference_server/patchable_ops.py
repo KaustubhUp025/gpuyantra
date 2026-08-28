@@ -8,6 +8,8 @@ model.
 
 Matching is by class-name SUBSTRING, so one call catches every instance across all 28
 decoder layers (`model.layers.0.input_layernorm`, `...post_attention_layernorm`, `norm`).
+The same mechanism reaches `torch.nn.LayerNorm` in GPT-2 — nothing here is Qwen-specific
+except the class names in `PATCHABLE_OPS`.
 
 The caller must check the returned dict: an empty one means nothing matched and the
 model is untouched — a silent no-op that would otherwise be reported as a successful
@@ -29,8 +31,15 @@ from typing import Any
 #: `swap_op` cannot reach it — it matches no `named_modules()` entry and returns {}.
 #: Patching it needs a module-attribute rebind instead; that is P2 stretch work and is
 #: deliberately not implemented here rather than half-implemented.
+#:
+#: Note on "layernorm": `torch.nn.LayerNorm` IS an `nn.Module` and IS reachable from
+#: `named_modules()`, so it swaps by exactly the same mechanism as Qwen2RMSNorm. It was
+#: previously grouped with "rope" as unpatchable, which was simply wrong — that is what
+#: makes GPT-2's normalization layers optimizable (Task 10). The class name is matched as
+#: a substring like every other entry, so a subclass (`FusedLayerNorm`) matches too.
 PATCHABLE_OPS: dict[str, dict[str, Any]] = {
     "rmsnorm": {"class_name": "Qwen2RMSNorm", "priority": 0},
+    "layernorm": {"class_name": "LayerNorm", "priority": 0},
     "swiglu": {"class_name": "Qwen2MLP", "priority": 1},
     "rope": {"class_name": "apply_rotary_pos_emb", "priority": 2},
 }
@@ -134,9 +143,31 @@ def _swiglu_adapter(entry: Callable) -> Callable:
     return forward
 
 
+def _layernorm_adapter(entry: Callable) -> Callable:
+    """torch.nn.LayerNorm.forward(self, input) -> entry(x, self.weight, self.bias, self.eps).
+
+    LayerNorm carries a `bias`, which RMSNorm does not, and calls its epsilon `eps`
+    rather than `variance_epsilon` — the two reasons a single hard-coded norm adapter
+    cannot cover both, and a small illustration of why the generated contract exists.
+
+    `self.normalized_shape` is deliberately NOT passed: this fallback must match the
+    signature the verifier benched the kernel against, which is
+    `entry(x, weight, bias, eps)` (see `_build_layernorm` in tools/profiler_tool.py). A
+    kernel that genuinely needs the shape declares it in its `adapter_mapping` and gets
+    it through the generic adapter below.
+    """
+
+    def forward(self, input, *args, **kwargs):  # noqa: A002, ANN001 — bound as a method
+        del args, kwargs
+        return entry(input, self.weight, self.bias, self.eps)
+
+    return forward
+
+
 #: op name -> adapter. "rope" is absent on purpose: it has no module to bind to.
 _ADAPTERS: dict[str, Callable[[Callable], Callable]] = {
     "rmsnorm": _rmsnorm_adapter,
+    "layernorm": _layernorm_adapter,
     "swiglu": _swiglu_adapter,
 }
 
