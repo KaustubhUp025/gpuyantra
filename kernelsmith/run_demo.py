@@ -382,10 +382,23 @@ def run_audit_all(device: str | None = None, output: str = "text") -> list[Audit
     that the top target CHANGES with the architecture — RMSNorm, LayerNorm, BatchNorm —
     while the reason it is the top target does not: the same roofline analysis, on the
     same hardware model, picking whichever normalization the architecture happens to use.
+
+    Defaults to CPU even on a GPU box, unlike a single-model audit. Two reasons, and the
+    second is why this is not just a speed concession:
+
+    - CUDA mode loads real weights and benches every unique module type at warmup=150,
+      rep=200. Across three models that is ~3.4 GB of downloads and minutes of do_bench;
+      `make audit-all` did not finish inside 600s on the dev box.
+    - The comparison table has an AI column and no bandwidth column, and AI is analytic
+      either way. The bandwidth CUDA would buy is a fraction of the L4's 300 GB/s, which
+      `format_audit_report` itself warns is not comparable when measured anywhere else —
+      so a cross-architecture sweep is exactly the case where it adds nothing.
+
+    Pass `--device cuda` explicitly to measure anyway.
     """
     from kernelsmith.config import MODEL_REGISTRY
 
-    resolved = device or default_audit_device()
+    resolved = device or "cpu"
     reports: list[AuditReport] = []
     for key in MODEL_REGISTRY:
         print()

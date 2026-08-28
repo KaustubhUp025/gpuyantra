@@ -1030,6 +1030,30 @@ during optimization (waste of VRAM).
 
 ---
 
+## `audit --all` defaults to CPU; a single `audit` follows the GPU (and says so)
+
+`make audit-all` passes no `--device`, so it resolved through `default_audit_device()` to
+`cuda` on any box with a GPU — three models of REAL weights (~3.4 GB) plus `do_bench` at
+warmup=150 over every unique module type. **It did not finish inside 600 s on the dev
+box.** `run_audit_all` now defaults to `"cpu"` regardless of the GPU, and takes 4 s.
+
+That is not only a speed concession. The comparison table has an AI column and no
+bandwidth column, AI is analytic either way, and the bandwidth CUDA would buy is a
+fraction of the L4's 300 GB/s — which `format_audit_report` itself warns is not
+comparable when measured anywhere else. A cross-architecture sweep is precisely the case
+where measuring adds nothing. `--device cuda` still forces it.
+
+A SINGLE-model `audit` keeps the spec's stated default ("cuda if available"), because
+that is the one case where a measurement is the point. It now prints
+`[audit] loading <id> weights for do_bench (CUDA mode; --device cpu skips this)` before
+`from_pretrained`: on a cold HuggingFace cache that line stands in front of a multi-GB
+download, and a silent multi-minute pause reads as a hang. Measured on the dev box with
+a cold cache: still downloading at 233 s.
+
+*Source: Task 10, dev box Aug 28.*
+
+---
+
 ## What Task 10 is validated on
 
 Dev box (RTX A500, Python 3.12.12, torch 2.12.1+cu130), Aug 28. **449 unit tests pass**
@@ -1037,7 +1061,8 @@ Dev box (RTX A500, Python 3.12.12, torch 2.12.1+cu130), Aug 28. **449 unit tests
 
 Verified by running it, not by inspection:
 
-- `make audit` and `make audit-all` on all three registered models, CPU mode. Top target
+- `make audit-all` (4 s, CPU) and `make audit AUDIT_ARGS="--device cpu"` (4 s) on all
+  three registered models. Top target
   is the model's own normalization every time — `Qwen2RMSNorm` (57), `LayerNorm` (25),
   `BatchNorm2d` (53) — and the comparison table puts the three side by side. The Qwen2
   numbers match the Aug 26 VM smoke test exactly (369 modules, 57 RMSNorms, weight [1536]).
@@ -1051,8 +1076,11 @@ Verified by running it, not by inspection:
 - `make demo`'s argv (`--no-server`, `--op`, bare) still parses to `optimize`.
 
 **Not validated:** `run_full` end to end (its `optimize` leg is a full Vertex + GPU run;
-that leg is unchanged from Task 9 and covered by the Task 9 note above), and no audit has
-been run on the L4 itself — the CPU-mode numbers are hardware-independent by construction,
-but the CUDA-mode `BW %` column has only ever been measured on an RTX A500.
+that leg is unchanged from Task 9 and covered by the Task 9 note above); `make audit` on
+its default CUDA path against Qwen2.5-1.5B (killed at 233 s mid-download on the dev box —
+the VM has those weights cached already); and no audit has been run on the L4 itself. The
+CPU-mode numbers are hardware-independent by construction, but **the CUDA-mode `BW %`
+column has only ever been measured on an RTX A500, where its L4 denominator is wrong.**
+`make audit` on the L4 is the one thing that makes that column mean what it says.
 
 *Source: Task 10, dev box Aug 28.*

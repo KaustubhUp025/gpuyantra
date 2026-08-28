@@ -1083,6 +1083,9 @@ def _load_for_audit(hf_id: str, on_cuda: bool, dtype: Any) -> tuple[Any, bool]:
     from transformers import AutoConfig, AutoModel
 
     if on_cuda:
+        # Said out loud: on a cold HuggingFace cache this is a multi-GB download for a
+        # bandwidth column, and a silent multi-minute pause reads as a hang.
+        print(f"[audit] loading {hf_id} weights for do_bench (CUDA mode; --device cpu skips this)")
         model = AutoModel.from_pretrained(hf_id, dtype=dtype).to("cuda").eval()
         return model, True
 

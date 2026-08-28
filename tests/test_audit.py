@@ -656,3 +656,67 @@ def test_the_comparison_table_survives_a_model_that_could_not_be_audited():
     text = format_comparison_table([empty])
     assert "gpt2" in text
     assert "(none)" in text
+
+
+def test_the_all_models_sweep_defaults_to_cpu_even_where_cuda_is_available():
+    """`make audit-all` passes no --device, and three models on CUDA does not finish.
+
+    A single-model audit follows `default_audit_device()`; the sweep does not, because
+    CUDA there costs ~3.4 GB of weight downloads and minutes of do_bench to fill a
+    bandwidth column the comparison table has no room for — and which is flagged
+    non-comparable anywhere but an L4 anyway.
+    """
+    from unittest.mock import patch
+
+    from kernelsmith.run_demo import run_audit_all
+
+    with patch("kernelsmith.run_demo.run_audit") as audit:
+        audit.return_value = AuditReport("m", 0, 0, [], "", "r")
+        run_audit_all()
+
+    devices = {call.kwargs["device"] for call in audit.call_args_list}
+    assert devices == {"cpu"}
+
+
+def test_the_sweep_still_honours_an_explicit_device():
+    from unittest.mock import patch
+
+    from kernelsmith.run_demo import run_audit_all
+
+    with patch("kernelsmith.run_demo.run_audit") as audit:
+        audit.return_value = AuditReport("m", 0, 0, [], "", "r")
+        run_audit_all(device="cuda")
+
+    assert {call.kwargs["device"] for call in audit.call_args_list} == {"cuda"}
+
+
+def test_the_sweep_covers_every_registered_model():
+    from unittest.mock import patch
+
+    from kernelsmith.config import MODEL_REGISTRY
+    from kernelsmith.run_demo import run_audit_all
+
+    with patch("kernelsmith.run_demo.run_audit") as audit:
+        audit.return_value = AuditReport("m", 0, 0, [], "", "r")
+        reports = run_audit_all()
+
+    assert [call.args[0] for call in audit.call_args_list] == list(MODEL_REGISTRY)
+    assert len(reports) == len(MODEL_REGISTRY)
+
+
+def test_one_unloadable_model_does_not_abort_the_sweep():
+    """`--all` on a box that cannot reach one model must still report the others."""
+    from unittest.mock import patch
+
+    from kernelsmith.config import MODEL_REGISTRY
+    from kernelsmith.run_demo import run_audit_all
+
+    def flaky(key, **_kwargs):
+        if key == list(MODEL_REGISTRY)[0]:
+            raise OSError("no network")
+        return AuditReport(key, 0, 0, [], "", "r")
+
+    with patch("kernelsmith.run_demo.run_audit", side_effect=flaky):
+        reports = run_audit_all()
+
+    assert len(reports) == len(MODEL_REGISTRY) - 1

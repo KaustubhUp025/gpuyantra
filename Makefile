@@ -29,15 +29,22 @@ demo:
 	CUBLAS_WORKSPACE_CONFIG=:4096:8 uv run python -m kernelsmith.run_demo $(DEMO_ARGS)
 
 # --- Audit (spec 7) ---------------------------------------------------------
-# Reads the model tree, not the weights: on CPU the audit builds every module from
-# config.json on the meta device, so `make audit` needs neither a GPU nor a 3 GB
-# download. AUDIT_ARGS reaches the subcommand:
+# On CPU the audit builds every module from config.json on the meta device — no GPU,
+# no weight download, ~4s for any of the three registered models. `audit` follows
+# the GPU when there is one (spec default), and CUDA mode DOES load real weights so
+# do_bench has something to time; on a cold cache that is a multi-GB download.
+# `audit-all` defaults to CPU regardless — see run_audit_all.
+# AUDIT_ARGS reaches the subcommand:
+#   make audit AUDIT_ARGS="--device cpu"
 #   make audit AUDIT_ARGS="--model gpt2 --device cuda"
 AUDIT_ARGS ?=
 
 audit:
 	GOOGLE_CLOUD_PROJECT=gpuyantra uv run python -m kernelsmith.run_demo audit $(AUDIT_ARGS)
 
+# The sweep runs on CPU unless --device says otherwise (see run_audit_all): three
+# models on CUDA means ~3.4 GB of weights and minutes of do_bench, for a bandwidth
+# column the comparison table does not have.
 audit-all:
 	GOOGLE_CLOUD_PROJECT=gpuyantra uv run python -m kernelsmith.run_demo audit --all $(AUDIT_ARGS)
 
