@@ -28,6 +28,7 @@ from kernelsmith import config
 from kernelsmith.agents.profiler_agent import build_profiler_agent
 from kernelsmith.agents.refinement_loop import build_refinement_loop
 from kernelsmith.agents.state_view import render
+from kernelsmith.sampling import deterministic_config
 from kernelsmith.tools.explainer_tool import explainer_tool
 from kernelsmith.tools.hotswap_tool import hotswap_tool
 from kernelsmith.tools.retrieval_tool import retrieval_tool
@@ -170,6 +171,7 @@ def build_supervisor() -> LlmAgent:
         instruction=build_instruction,
         tools=[retrieval_tool, upsert_tool, hotswap_tool, explainer_tool],
         sub_agents=[build_profiler_agent(), build_refinement_loop()],
+        generate_content_config=deterministic_config(),
         output_key="supervisor_summary",
         after_tool_callback=capture_tool_results,
     )

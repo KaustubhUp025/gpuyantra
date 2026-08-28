@@ -6,9 +6,16 @@ readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "Kaustubh", email = "kaustubhme0@gmail.com" }]
 
-# All versions pinned exactly per spec Section 0 (VERIFIED August 2026).
-# Do not float these — the verifier, monkey-patch targets, and Vertex model IDs
-# are all validated against these exact releases.
+# All versions pinned exactly per spec Section 0 (VERIFIED August 2026) and the
+# reproducibility contract (spec Section 11: "Exact pins in pyproject.toml for ADK,
+# torch, triton, transformers, CUDA"). Do not float these — the verifier, monkey-patch
+# targets, and Vertex model IDs are all validated against these exact releases.
+#
+# Every DIRECT dependency below is `==`-pinned. The full transitive closure (127
+# packages) is pinned by the committed `uv.lock`; `make setup` installs with
+# `uv sync --frozen`, which refuses to re-resolve, so a fresh L4 gets byte-identical
+# versions of the transitives too. Regenerate the lock deliberately with `uv lock`,
+# never as a side effect. `uv lock --check` verifies lock and pyproject agree.
 dependencies = [
     # --- Agents (ADK, in-process only) ---
     "google-adk==2.7.1",
@@ -20,7 +27,7 @@ dependencies = [
     "triton==3.7.1",
     "transformers==4.57.6",
     # device_map="cuda" in from_pretrained() imports accelerate; missing from spec S0.
-    "accelerate>=1.14.0",
+    "accelerate==1.14.0",
     # --- Inference server ---
     "fastapi==0.141.1",
     "uvicorn[standard]==0.52.4",
@@ -31,6 +38,9 @@ dependencies = [
     # --- Structured boundaries ---
     "pydantic==2.13.4",
     "numpy==2.4.6",  # latest numpy that still supports Python 3.11 (DLVM ships 3.11)
+    # kernelsmith/__init__.py loads .env before config.py reads os.environ. Already a
+    # transitive of google-adk and streamlit; declared because we import it directly.
+    "python-dotenv==1.2.3",
 ]
 
 [dependency-groups]
@@ -38,6 +48,9 @@ dev = [
     "pytest==9.1.1",
     "pytest-asyncio==1.4.0",
     "ruff==0.16.4",
+    # tests/test_integration.py imports google.auth.default() directly to detect the
+    # Compute Engine metadata server; declared so it is not an accidental transitive.
+    "google-auth==2.56.3",
 ]
 
 [build-system]

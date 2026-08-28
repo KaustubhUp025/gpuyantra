@@ -118,3 +118,47 @@ def test_default_seed_is_the_configured_one():
     from_explicit = torch.randn(8)
 
     assert torch.equal(from_default, from_explicit)
+
+
+# --------------------------------------------------------------------------- #
+# .env loading (the setup path the README documents)
+# --------------------------------------------------------------------------- #
+
+
+def test_the_package_loads_the_env_file_without_overriding_the_real_environment(tmp_path):
+    """A shell variable must always beat the file.
+
+    `config.py` reads GOOGLE_CLOUD_PROJECT strictly at import time, so `.env` has to be
+    loaded by `kernelsmith/__init__.py` before anything else. The danger in doing that
+    is a stale `.env` silently redirecting a run to the wrong GCP project behind an
+    explicit `GOOGLE_CLOUD_PROJECT=... uv run ...`, so the loader is override=False.
+    """
+    import os
+    from unittest import mock
+
+    import kernelsmith
+
+    env_file = tmp_path / ".env"
+    env_file.write_text("KS_TEST_ONLY_UNSET=from-file\nKS_TEST_ONLY_SET=from-file\n")
+
+    with (
+        mock.patch.object(kernelsmith, "_ENV_FILE", env_file),
+        mock.patch.dict(os.environ, {"KS_TEST_ONLY_SET": "from-shell"}, clear=False),
+    ):
+        os.environ.pop("KS_TEST_ONLY_UNSET", None)
+        try:
+            kernelsmith._load_env_file()
+            assert os.environ["KS_TEST_ONLY_UNSET"] == "from-file"
+            assert os.environ["KS_TEST_ONLY_SET"] == "from-shell"
+        finally:
+            os.environ.pop("KS_TEST_ONLY_UNSET", None)
+
+
+def test_a_missing_env_file_is_not_an_error(tmp_path):
+    """The VM exports these in the shell profile and has no repo-root .env."""
+    from unittest import mock
+
+    import kernelsmith
+
+    with mock.patch.object(kernelsmith, "_ENV_FILE", tmp_path / "nope.env"):
+        kernelsmith._load_env_file()  # must not raise

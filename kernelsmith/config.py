@@ -12,9 +12,16 @@ FIRESTORE_SUBCOLLECTION_TRACES = "traces"
 
 # --- Models ---
 PRIMARY_MODEL = "gemini-3.7-flash"  # All agents: Supervisor, Coder, Judge, Profiler
+LLM_TEMPERATURE = 0.0  # Greedy decoding on EVERY agent; spec 11 mandates it on the Judge
+LLM_RETRY_ATTEMPTS = 5  # A 429 mid-demo must back off, not end the run
+LLM_RETRY_INITIAL_DELAY_S = 2.0
+LLM_RETRY_MAX_DELAY_S = 60.0
 EMBEDDING_MODEL = "gemini-embedding-001"
 EMBEDDING_DIM = 768  # MRL truncation; assert after every call
-GEMMA_MODEL = "gemma-4-26b-a4b-it"  # Bonus kernel-explainer (MaaS, no self-deploy)
+GEMMA_MODEL = "gemma-4-26b-a4b-it-maas"  # Bonus kernel-explainer; MaaS ids carry the suffix
+# ^ The spec writes this without "-maas". That id 404s in every region: the Vertex
+#   publisher model is literally named `gemma-4-26b-a4b-it-maas`. Same model, MaaS
+#   serving name. See .claude/rules/implementation-deviations.md.
 
 # --- Verifier ---
 CORRECTNESS_SEEDS = 5

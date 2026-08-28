@@ -35,7 +35,7 @@ from kernelsmith.agents.judge_agent import (
 from kernelsmith.agents.profiler_agent import build_instruction as profiler_instruction
 from kernelsmith.agents.supervisor import build_instruction as supervisor_instruction
 from kernelsmith.agents.supervisor import build_supervisor
-from kernelsmith.config import MAX_LOOP_ITERATIONS, PRIMARY_MODEL
+from kernelsmith.config import GLOBAL_SEED, MAX_LOOP_ITERATIONS, PRIMARY_MODEL
 from kernelsmith.memory.schemas import Verdict
 from kernelsmith.tools.verifier_tool import adapter_mapping_from_draft, verifier_tool
 
@@ -460,3 +460,77 @@ def test_the_judge_is_told_not_to_pass_the_contract():
     from kernelsmith.agents.judge_agent import _INSTRUCTION
 
     assert "not yours to pass" in _INSTRUCTION.lower()
+
+
+# --------------------------------------------------------------------------- #
+# Sampling determinism (spec 11)
+# --------------------------------------------------------------------------- #
+
+
+def _every_llm_agent(agent):
+    """Walk the tree, yielding only the agents that actually call a model."""
+    if isinstance(agent, LlmAgent):
+        yield agent
+    for sub in getattr(agent, "sub_agents", None) or []:
+        yield from _every_llm_agent(sub)
+
+
+def test_every_agent_decodes_greedily():
+    """Spec 11 pins the model as well as the RNGs.
+
+    Reseeding torch cannot make a *sampled* kernel come back the same, so an agent left
+    at the Vertex default temperature makes `make demo` unreproducible on its own — and
+    unreproducibly so, since the reward would move without anything in the repo changing.
+    """
+    from kernelsmith.agents.supervisor import build_supervisor
+
+    agents = list(_every_llm_agent(build_supervisor()))
+    assert {a.name for a in agents} == {"Supervisor", "Profiler", "Coder", "Judge"}
+
+    for agent in agents:
+        cfg = agent.generate_content_config
+        assert cfg is not None, f"{agent.name} has no generate_content_config"
+        assert cfg.temperature == 0.0, f"{agent.name} samples at temperature {cfg.temperature}"
+        assert cfg.seed == GLOBAL_SEED, f"{agent.name} does not pin the decode seed"
+
+
+def test_the_gemma_explainer_decodes_greedily_too():
+    """The bonus explanation is printed by `make demo`; it has to print the same twice."""
+    import inspect
+
+    from kernelsmith.tools import explainer_tool
+
+    source = inspect.getsource(explainer_tool.explain_kernel)
+    assert "config=deterministic_config()" in source
+
+
+def test_the_gemma_model_id_keeps_the_maas_suffix():
+    """`gemma-4-26b-a4b-it` — the id the spec writes — 404s in every Vertex region.
+
+    The publisher model is served as `…-it-maas`. This is pinned as a test because the
+    failure is soft: the explainer swallows its own errors so a bonus never kills a
+    verified run, so reverting the id would put `error: ClientError: 404 …` in the demo
+    output instead of an explanation, with everything else still green.
+    """
+    from kernelsmith import config
+
+    assert config.GEMMA_MODEL == "gemma-4-26b-a4b-it-maas"
+
+
+def test_every_agent_backs_off_on_a_rate_limit():
+    """A 429 mid-run must retry, not end the demo.
+
+    Found by running `make demo` twice back to back: the second run exhausted the
+    project's per-minute Vertex quota and died five seconds in with an unhandled
+    `_ResourceExhaustedError`. ADK surfaces the model error and stops — nothing below it
+    retries unless google-genai is told to.
+    """
+    from kernelsmith.agents.supervisor import build_supervisor
+
+    for agent in _every_llm_agent(build_supervisor()):
+        retry = agent.generate_content_config.http_options.retry_options
+        assert retry.attempts >= 3, f"{agent.name} gives up too early"
+        assert 429 in retry.http_status_codes, f"{agent.name} does not retry a rate limit"
+        # A 400/403 is a bug or a permission gap; retrying it only spends budget slower.
+        assert 400 not in retry.http_status_codes
+        assert 403 not in retry.http_status_codes

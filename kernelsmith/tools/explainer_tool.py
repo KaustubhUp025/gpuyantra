@@ -21,6 +21,7 @@ import google.genai as genai
 from google.adk.tools import FunctionTool
 
 from kernelsmith.config import GCP_LOCATION, GCP_PROJECT, GEMMA_MODEL
+from kernelsmith.sampling import deterministic_config
 
 #: Gemma has no system-instruction slot on MaaS, so the framing rides in the prompt.
 _PROMPT = """Explain what this Triton kernel does, why it's faster than the eager PyTorch
@@ -71,6 +72,9 @@ def explain_kernel(kernel_source: str) -> str:
         response = _get_client().models.generate_content(
             model=GEMMA_MODEL,
             contents=_PROMPT.format(kernel_source=source),
+            # Same greedy policy as the agents: a recorded demo should print the same
+            # explanation twice. See kernelsmith/sampling.py.
+            config=deterministic_config(),
         )
     except Exception as exc:  # noqa: BLE001 — the bonus path never breaks the main one
         return f"error: {type(exc).__name__}: {exc}"

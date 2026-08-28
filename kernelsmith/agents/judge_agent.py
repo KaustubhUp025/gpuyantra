@@ -28,6 +28,7 @@ from google.adk.agents.readonly_context import ReadonlyContext
 from kernelsmith import config
 from kernelsmith.agents.state_view import as_dict, render
 from kernelsmith.memory.schemas import Verdict
+from kernelsmith.sampling import deterministic_config
 from kernelsmith.tools.verifier_tool import adapter_mapping_from_draft, verifier_tool
 
 logger = logging.getLogger(__name__)
@@ -248,6 +249,7 @@ def build_judge_agent() -> LlmAgent:
         description="Verifies a kernel draft in the sandbox and returns a scored verdict.",
         instruction=build_instruction,
         tools=[verifier_tool],
+        generate_content_config=deterministic_config(),
         output_key="verdict",
         after_agent_callback=record_verdict,
         # The loop order is Coder -> Judge -> EscalationChecker; transfers would break it.

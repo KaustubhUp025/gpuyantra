@@ -25,6 +25,7 @@ from google.adk.tools.tool_context import ToolContext
 
 from kernelsmith import config
 from kernelsmith.agents.state_view import render
+from kernelsmith.sampling import deterministic_config
 from kernelsmith.tools.profiler_tool import profiler_tool
 
 #: `temp:` state is visible for the rest of the invocation but never persisted.
@@ -89,6 +90,7 @@ def build_profiler_agent() -> LlmAgent:
         ),
         instruction=build_instruction,
         tools=[profiler_tool],
+        generate_content_config=deterministic_config(),
         output_key="bottleneck_fingerprint",
         after_tool_callback=capture_fingerprint,
         after_agent_callback=promote_fingerprint,

@@ -20,6 +20,7 @@ from google.adk.agents.readonly_context import ReadonlyContext
 from kernelsmith import config
 from kernelsmith.agents.state_view import FEEDBACK_CHARS, as_dict, render, render_skills
 from kernelsmith.memory.schemas import KernelDraft
+from kernelsmith.sampling import deterministic_config
 
 _INSTRUCTION = """\
 You write ONE Triton kernel to optimize the operation described in the task below.
@@ -110,6 +111,7 @@ def build_coder_agent() -> LlmAgent:
         model=config.PRIMARY_MODEL,
         description="Writes one Triton kernel draft per iteration from the bottleneck fingerprint.",
         instruction=build_instruction,
+        generate_content_config=deterministic_config(),
         output_key="kernel_draft",
         output_schema=KernelDraft,
         # An unjudged kernel must never escape the loop, in either direction.

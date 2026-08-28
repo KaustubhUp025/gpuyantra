@@ -545,16 +545,22 @@ What both runs cover:
 - the dashboard renders without exception, and all five agents stream events.
 
 **Still not validated anywhere: live tokens/sec across a hot-swap (demo beat 9.)**
-No `run_demo` has ever completed — the `runs` collection in Firestore is empty, and no
-VM session has run `make demo`, the inference server, or a live `/swap`. The pieces
-underneath it are individually verified (the swap mechanism, parity, rollback, the
-adapter, `TokenMeter` clearing its window), but the end-to-end throughput jump the demo
-is built around has not been observed on a served model.
+The pieces underneath it are individually verified (the swap mechanism, parity, rollback,
+the adapter, `TokenMeter` clearing its window), but the end-to-end throughput jump the
+demo is built around has not been observed on a served model.
 
-This is the one open item before recording. Run `make demo` on the L4 and check that the
-`runs` record lands with a non-empty `hotswap_result`.
+*Updated Aug 28 (Task 9).* `run_demo` has now completed end to end, twice, on the dev box
+with `--no-server`: the agent half runs, the verifier scores it, the skill is upserted and
+a `runs` record lands. What is still missing is exactly the server half — those runs
+report `hot-swap: not live (connection refused)` because a 4 GB RTX A500 cannot hold
+Qwen2.5-1.5B (3.09 GB) and the verifier sandbox at the same time. Only an L4 can.
 
-*Source: Task 8, dev box Aug 27; VM re-run Aug 27 (18/18 integration, 329 total).*
+This remains the one open item before recording. Run `make demo` on the L4 — with the
+server, no `--no-server` — and check that the `runs` record lands with a non-empty
+`hotswap_result`.
+
+*Source: Task 8, dev box Aug 27; VM re-run Aug 27 (18/18 integration, 329 total); Task 9
+dev-box demo runs Aug 28.*
 
 ---
 
@@ -594,3 +600,127 @@ non-None credentials as available, wrapped in `try/except` so a machine with no
 credentials at all still skips rather than errors.
 
 *Source: VM integration run, Aug 27. Fix authored on the VM (commit 8a230db).*
+
+---
+
+## The Gemma bonus model id needs the `-maas` suffix (overrides §15 and CLAUDE.md rule 1)
+
+`GEMMA_MODEL` is `gemma-4-26b-a4b-it-maas`, not `gemma-4-26b-a4b-it`.
+
+Observed in the first `make demo` that ever completed: the Gemma explainer returned
+`404 NOT_FOUND` — "Publisher model `projects/gpuyantra/locations/global/publishers/
+google/models/gemma-4-26b-a4b-it` was not found or your project does not have access".
+Not a regional gap and not a permissions gap: the same id 404s in `global`,
+`us-central1`, `us-east4` and `europe-west4`. Listing what the project can actually see
+(`GET /v1beta1/publishers/google/models`) returns `gemma-4-26b-a4b-it-maas` — the
+Model-as-a-Service serving name, which is how every Gemma MaaS model is published on
+Vertex. Same model, different id.
+
+Verified after the change: `gemma-4-26b-a4b-it-maas` on **`global`** returns a
+completion. `us-central1` returns `400 FAILED_PRECONDITION` for this model, so the
+explainer's client must stay on the global endpoint like everything else here.
+
+This is a deliberate departure from CLAUDE.md critical rule 1, which names
+`gemma-4-26b-a4b-it` literally. The rule exists to stop silent downgrades to an older
+model family; this is the same Gemma 4 26B instruction-tuned model under the name Vertex
+actually serves it as. The bonus agent was dead without it — it failed softly, returning
+`error: ClientError: 404 …` into the demo output, because an explanation is a bonus and
+must never fail a run whose kernel is already verified.
+
+*Source: Task 9, first completed `make demo` run, Aug 28.*
+
+---
+
+## Every agent decodes greedily, and retries a rate limit (implements §11, adds to §4.2)
+
+Spec §11 lists `temperature=0` **on the Judge** in the same row as the torch/NumPy/random
+seeds. No agent set a `generate_content_config` at all, so all four — and the Gemma
+explainer — ran at the Vertex default (~1.0).
+
+That gap was larger than its one-line placement in the spec suggests. Reseeding torch
+cannot make a *sampled* kernel come back the same: the seeds pinned everything below the
+model while the model itself was free to write a different kernel every run. Two
+`make demo` runs would have reported different rewards and different speedups from
+identical inputs — the Sakana failure mode arriving through the one door the
+reproducibility contract had left open.
+
+`kernelsmith/sampling.py` now holds one `deterministic_config()` — `temperature=0`,
+`seed=GLOBAL_SEED` — applied to Supervisor, Profiler, Coder, Judge and the Gemma call.
+Applied to the Coder as well as the Judge on purpose: the kernel *is* the headline number.
+The Coder does not stall on a repeated prompt, because its prompt carries the previous
+verdict's `next_action` and `stderr_tail`, which change every iteration.
+
+The same object carries the retry policy, found the hard way: two `make demo` runs back
+to back exhausted the project's per-minute Vertex quota, and the second died five seconds
+in on an unhandled `429 RESOURCE_EXHAUSTED` — forty lines of ADK traceback, exit code 2,
+nothing salvaged. ADK surfaces the model error and stops; nothing below it retries. So
+`http_options.retry_options` asks google-genai for 5 attempts with exponential backoff on
+`[429, 500, 502, 503, 504]` only — a 400 or 403 is a bug or a permission gap, and
+retrying it just spends the budget more slowly.
+
+Locked down by `test_every_agent_decodes_greedily` and
+`test_every_agent_backs_off_on_a_rate_limit`, both of which walk the built tree, so an
+agent added later without a config fails the suite.
+
+*Source: Task 9, spec §20 checklist audit + two live demo runs, Aug 28.*
+
+---
+
+## `.env` is loaded by `kernelsmith/__init__.py`, override=False (fixes `make demo` from a clean clone)
+
+`config.py` reads `GOOGLE_CLOUD_PROJECT` with `os.environ[...]`, strictly, so a missing
+project fails loudly instead of talking to the wrong one. Nothing in the repo loaded the
+`.env` file the README tells you to create. ADK reads `.env` only through the `adk` CLI,
+which neither `make demo` nor `make serve-ui` goes through, so the documented setup path —
+`cp .env.example .env && make demo` — died on a `KeyError` one line into startup.
+
+Invisible until now because it never fired anywhere it was being tested: the VM exports
+the variables from the shell profile, and `tests/conftest.py` sets them itself. The
+earlier deviations note claiming "dotenv loads it into Python" was describing something
+that was not in this repo.
+
+Loading it in the package `__init__` is the only hook guaranteed to run before any
+`kernelsmith.*` import. `override=False` is the load-bearing argument: a real environment
+variable — the VM's profile, a CI secret, `GOOGLE_CLOUD_PROJECT=... uv run ...` — always
+beats the file, so a stale `.env` can never silently redirect a run to another GCP
+project. `python-dotenv==1.2.3` is now a declared dependency rather than an accidental
+transitive of ADK, with a minimal built-in parser as fallback.
+
+*Source: Task 9, first attempt at `make demo` on a box without the variables exported.*
+
+---
+
+## `make demo` reproducibility, measured (closes the Task 9 gate)
+
+Two `make demo --no-server` runs, back to back, same seed, dev box (RTX A500), Aug 28,
+both with the greedy-decoding fix in place:
+
+| | Run 1 | Run 2 |
+|---|---|---|
+| reward | +3 | +3 |
+| iterations | 1 | 1 |
+| speedup vs eager | 7.04x | 7.04x |
+| speedup vs torch.compile | 1.39x | 1.39x |
+| latency `1x128`, `8x512` | bit-identical | bit-identical |
+| latency `16x2048` | 3.3178 ms | 3.3167 ms |
+| bandit arm | `rmsnorm_fp16_l4_v1` | `rmsnorm_l4_single_pass_fused` |
+
+Reward and both speedups reproduce exactly. The `16x2048` latency moves by 0.03%, which
+is `do_bench` wall-clock noise on the largest shape, not a different kernel.
+
+**The arm is supposed to differ.** Run 1 upserted the kernel it had just verified, and
+UCB1 gives a zero-pull arm an unbounded exploration bonus, so run 2 pulls the new one.
+This is the memory working. It also means back-to-back runs are not a valid replay:
+restore the Firestore snapshot (`make export-firestore` /
+`gcloud firestore import`) before any run that has to reproduce an earlier one. That is
+what spec §11's "Firestore snapshot" row was always for; there was no script for it until
+now (`scripts/export_firestore.sh`).
+
+The winning kernels differ by exactly one line — a comment — for the same reason: a
+different retrieved skill is a different prompt, and greedy decoding on a different
+prompt may legitimately differ. The code was identical and measured identically.
+
+Note the speedups here (7.04x / 1.39x) are the RTX A500's, not the L4's. The L4 numbers
+from Task 8 are 6.92x / 1.36x. Do not quote these two interchangeably.
+
+*Source: Task 9, Aug 28.*

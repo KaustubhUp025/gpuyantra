@@ -359,7 +359,7 @@ re-ran them. Both collapses were seeding and baseline artifacts.
 
 | Layer | Command | Scope |
 |---|---|---|
-| Unit | `make test-unit` | Hermetic. No GPU, no network. 311 tests. |
+| Unit | `make test-unit` | Hermetic. No GPU, no network. 317 tests. |
 | Integration | `make test-int` | Live gemini-3.7-flash + Firestore + GPU, `max_iterations=2`. |
 | All | `make test` | Both. |
 

@@ -22,7 +22,9 @@ make demo # Full reproducible demo
 
 ## Critical Rules
 
-1. Never use model IDs other than gemini-3.7-flash, gemini-embedding-001, gemma-4-26b-a4b-it
+1. Never use model IDs other than gemini-3.7-flash, gemini-embedding-001,
+   gemma-4-26b-a4b-it-maas (the MaaS serving name; the unsuffixed id 404s in every
+   region — see `.claude/rules/implementation-deviations.md`)
 2. Never run generated Triton code in the main process — subprocess sandbox only
 3. Never weaken the verifier (fewer seeds, looser tolerance, dropped AST checks)
 4. Never remove max_iterations from any LoopAgent
