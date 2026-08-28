@@ -1054,6 +1054,39 @@ a cold cache: still downloading at 233 s.
 
 ---
 
+## What a CUDA audit actually costs: 8 s of bench, and however long the weights take
+
+Measured on the dev box, Aug 28. The bench is free; every slow audit was a download.
+
+| | weights | download @1.75 MB/s | audit incl. load+bench |
+|---|---|---|---|
+| GPT-2 | 523 MB | (cached) | **8 s** |
+| ResNet-50 | 102 MB | ~1 min | **62 s** |
+| Qwen2.5-1.5B | 3,087 MB | ~29 min | not run locally |
+
+`do_bench` over every unique module type of a model costs single-digit seconds, so
+`--device cuda` is cheap wherever the weights are already local — which is the L4 VM for
+Qwen2.5-1.5B, since the inference server serves that exact checkpoint. Pulling 3.1 GB to
+a laptop to measure a column whose denominator is the L4's bandwidth is the one case not
+worth it.
+
+The `ResNet*` composite rows show `n/a` for BW: their forwards do not accept a bare
+synthetic probe, so `_measure_bandwidth_pct` returns 0.0 and the table blanks the cell.
+Working as intended — an unbenchable module is a blank cell, never an exception, and never
+a fabricated 0%.
+
+**A conv can cross the ridge point between fp32 and fp16.** ResNet-50's representative
+`Conv2d` reads 53 FLOP/byte (memory-bound, MEDIUM) in CPU/fp32 mode and 107 FLOP/byte
+(compute-bound, LOW) in CUDA/fp16 — halving the bytes doubles the intensity, and 107 is
+just past the L4's ridge of 101. Not a bug in either mode: the byte count is real and the
+op genuinely sits on the ridge at this probe shape. It does mean a conv's REGIME is not
+dtype-independent the way a norm's is (a norm is two orders of magnitude clear), so quote
+the mode alongside the number.
+
+*Source: Task 10, dev box Aug 28.*
+
+---
+
 ## What Task 10 is validated on
 
 Dev box (RTX A500, Python 3.12.12, torch 2.12.1+cu130), Aug 28. **449 unit tests pass**
@@ -1066,8 +1099,9 @@ Verified by running it, not by inspection:
   is the model's own normalization every time — `Qwen2RMSNorm` (57), `LayerNorm` (25),
   `BatchNorm2d` (53) — and the comparison table puts the three side by side. The Qwen2
   numbers match the Aug 26 VM smoke test exactly (369 modules, 57 RMSNorms, weight [1536]).
-- `audit --device cuda` on GPT-2 with real weights: `do_bench` measured, LayerNorm at 39%
-  of the L4's quoted bandwidth, with the off-L4 warning printed.
+- `audit --device cuda` with real weights on **GPT-2** (LayerNorm 0.88 F/B, 39% BW, top
+  target) and **ResNet-50** (BatchNorm2d 0.88, 19%; ReLU 0.25, 25%; top target
+  BatchNorm2d) — `do_bench` measured, off-L4 warning printed in both.
 - `audit --output json` round-trips through `json.load`.
 - Cross-model transfer against the **live** Firestore library: GPT-2's LayerNorm
   fingerprint retrieved all three Qwen2.5 RMSNorm skills, nearest at distance 0.0128.
@@ -1076,11 +1110,14 @@ Verified by running it, not by inspection:
 - `make demo`'s argv (`--no-server`, `--op`, bare) still parses to `optimize`.
 
 **Not validated:** `run_full` end to end (its `optimize` leg is a full Vertex + GPU run;
-that leg is unchanged from Task 9 and covered by the Task 9 note above); `make audit` on
-its default CUDA path against Qwen2.5-1.5B (killed at 233 s mid-download on the dev box —
-the VM has those weights cached already); and no audit has been run on the L4 itself. The
-CPU-mode numbers are hardware-independent by construction, but **the CUDA-mode `BW %`
-column has only ever been measured on an RTX A500, where its L4 denominator is wrong.**
+that leg is unchanged from Task 9 and covered by the Task 9 note above); and **the CUDA
+audit of Qwen2.5-1.5B — the served model — has never been run**, because its 3.1 GB is a
+~29-minute download to the dev box and is already cached on the VM. Two of three
+architectures are measured on CUDA; the third is the cheap one to do on the L4.
+
+No audit has been run on the L4 itself. The CPU-mode numbers are hardware-independent by
+construction, but **the CUDA-mode `BW %` column has only ever been measured on an RTX
+A500, where its L4 denominator is wrong** — every such run says so in its own header.
 `make audit` on the L4 is the one thing that makes that column mean what it says.
 
 *Source: Task 10, dev box Aug 28.*
