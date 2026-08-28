@@ -364,8 +364,13 @@ no `module_cls`. So:
 - the check builds a real instance under `torch.device("meta")` — zero bytes allocated,
   no GPU — and runs `hasattr` against *that*.
 
-Ops with no `nn.Module` in Qwen2 (`rope`, `softmax`, `silu`, `layernorm`) reject any
+Ops with no `nn.Module` in Qwen2 (`rope`, `softmax`, `silu`) reject any
 non-empty mapping: an unvalidatable contract is also an undeployable one.
+
+Note: `layernorm` was previously in this reject list, but `torch.nn.LayerNorm`
+IS an `nn.Module` — it was incorrectly lumped with non-module ops like
+`apply_rotary_pos_emb`. LayerNorm is now a valid patchable op (see Task 10
+addendum below).
 
 If the probe cannot be built (transformers missing, a signature change upstream),
 validation degrades to a declared name allowlist rather than blocking a verified
@@ -724,3 +729,65 @@ Note the speedups here (7.04x / 1.39x) are the RTX A500's, not the L4's. The L4 
 from Task 8 are 6.92x / 1.36x. Do not quote these two interchangeably.
 
 *Source: Task 9, Aug 28.*
+
+---
+
+## Multi-model audit — CPU-mode profiling (adds to §7, Task 10)
+
+`audit_model()` can run on CPU with analytic FLOP/byte estimates (computed from
+parameter shapes, not measured via `do_bench`). This means the audit tab in the
+dashboard and `make audit` work without a GPU — only the actual kernel optimization
+requires CUDA. The CPU-mode arithmetic intensity values are estimates; GPU-mode
+values from `do_bench` are authoritative.
+
+When running on CUDA, `audit_model()` uses `do_bench` on one representative instance
+of each unique module type to get measured bandwidth utilization. On CPU, it uses
+analytic estimates and labels the results "estimated" in the report.
+
+*Source: Task 10.*
+
+---
+
+## LayerNorm added to OP_REGISTRY and PATCHABLE_OPS (extends §8.3, Task 10)
+
+`torch.nn.LayerNorm` IS an `nn.Module` and CAN be discovered via `named_modules()`.
+It was previously incorrectly listed in the adapter_mapping reject list alongside
+actual non-module ops (rope, softmax, silu). LayerNorm is now in `PATCHABLE_OPS`,
+`_OP_MODULES`, and `OP_REGISTRY` with a proper adapter.
+
+LayerNorm adapter extracts: `self.weight`, `self.bias`, `self.eps`,
+`self.normalized_shape`. Note `bias` (LayerNorm has bias; RMSNorm does not) —
+the generic adapter path via `build_forward_from_mapping()` handles this correctly
+because the Coder declares the full mapping.
+
+Constructor for meta-device validation:
+`torch.nn.LayerNorm(normalized_shape=hidden_size, device=torch.device("meta"))`
+
+*Source: Task 10.*
+
+---
+
+## MODEL_REGISTRY — supported models for audit (adds to §0, Task 10)
+
+Three architecturally diverse, ungated models are registered in `config.py`:
+- `qwen2.5-1.5b`: Qwen/Qwen2.5-1.5B-Instruct (RMSNorm, SiLU, decoder)
+- `gpt2`: openai-community/gpt2 (LayerNorm, GELU, decoder)
+- `resnet50`: microsoft/resnet-50 (BatchNorm, ReLU, vision)
+
+All MIT or Apache-2.0 licensed, no gating. Total FP16 footprint ~3.4 GB.
+Load one at a time for audit profiling — do not load all simultaneously
+during optimization (waste of VRAM).
+
+*Source: Task 10.*
+
+---
+
+## run_demo.py CLI subcommands (extends §14, Task 10)
+
+`run_demo.py` now uses argparse with subcommands: `audit`, `optimize`, `full`.
+- `audit`: profiles a model, prints the audit report. Accepts `--model`, `--device`, `--all`.
+- `optimize`: existing behavior (optimize RMSNorm on Qwen2.5). Backward compatible.
+- `full`: audit → optimize → re-audit → cross-model transfer demo.
+- Default (no subcommand): `optimize` — so `make demo` is backward compatible.
+
+*Source: Task 10.*

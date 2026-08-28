@@ -11,7 +11,9 @@ make test # All tests
 make lint # ruff check + format
 make serve-inference # FastAPI on :8000
 make serve-ui # Streamlit on :8501
-make demo # Full reproducible demo                                                                                                                                                                          
+make demo # Full reproducible demo
+make audit # Audit default model (Qwen2.5-1.5B)
+make audit-all # Audit all registered models
 ## Architecture (locked — do not change)
 
 - **Framework:** google-adk==2.7.1, in-process only
@@ -19,6 +21,9 @@ make demo # Full reproducible demo
 - **Memory:** Firestore Native, Vector(768), COSINE, composite pre-filter
 - **Served model:** Qwen2.5-1.5B-Instruct on single NVIDIA L4
 - **Package manager:** uv
+- **Audit targets:** MODEL_REGISTRY in config.py (Qwen2.5-1.5B, GPT-2, ResNet-50)
+- **Patchable ops:** RMSNorm (P0), SwiGLU/MLP (P1), LayerNorm (P0 on GPT-2)
+- **Audit mode:** Works on CPU (analytic FLOP/byte) or CUDA (measured via do_bench)
 
 ## Critical Rules
 
@@ -34,6 +39,9 @@ make demo # Full reproducible demo
 8. Always assert len(embedding)==768 and L2-normalize after every embedding call
 9. Always set do_bench warmup>=150 (default 25 underestimates by ~30%)
 10. Never torch.compile before monkey-patching
+11. LayerNorm IS an nn.Module — do NOT reject it from adapter_mapping validation
+12. audit_model() must work on CPU (no GPU) using analytic FLOP/byte estimates
+13. MODEL_REGISTRY models must be ungated (no license acceptance required to download)
 
 ## Code Style
 
