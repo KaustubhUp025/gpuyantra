@@ -1121,3 +1121,32 @@ A500, where its L4 denominator is wrong** — every such run says so in its own 
 `make audit` on the L4 is the one thing that makes that column mean what it says.
 
 *Source: Task 10, dev box Aug 28.*
+
+---
+
+
+## Event capture and replay for demo dashboard (Task 12)
+
+Events from `runner.run_async()` are captured to JSONL via `EventLogger`.
+Each line is a JSON object with `elapsed_s`, `author`, `event_type`,
+`content_text`, `function_calls`, `function_responses`, `state_delta`,
+`transfer_to`, `escalate`, `partial`, `is_final`. Non-serializable ADK
+Event fields fall back to `repr()`.
+
+The demo dashboard (`demo_dashboard.py`) supports two modes:
+- **Live**: events from EventStreamConsumer (requires runner + Vertex AI)
+- **Replay**: events from a JSONL file (requires nothing — works locally)
+
+Replay mode uses `time.sleep((t[n] - t[n-1]) / speed)` between events.
+The rendering code is identical for both modes — it receives event dicts
+from different sources.
+
+The sample fixture at `data/traces/sample_run.jsonl` has 12 events
+exercising every event type. It serves as test fixture, development aid,
+and fallback demo if the live run fails during recording.
+
+The demo dashboard is a SEPARATE Streamlit app (`demo_dashboard.py`),
+NOT a page inside `streamlit_app.py`. `make serve-demo` runs it on :8502.
+The existing dashboard on :8501 is unchanged.
+
+*Source: Task 12.*

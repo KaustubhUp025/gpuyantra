@@ -35,6 +35,12 @@ dependencies = [
     # --- Dashboard ---
     "streamlit==1.62.0",
     "streamlit-autorefresh==1.0.1",  # 1 Hz whole-script rerun; the UI falls back to a button
+    # Agent-tree diagram on the demo dashboard. NOTE: st.graphviz_chart renders a DOT
+    # *string* in the browser, so demo_dashboard.py needs neither this package nor the
+    # system graphviz binary at runtime — build_agent_graph() emits DOT text. Declared
+    # per CLAUDE.md rule 16 for rendering the same DOT to a file offline; that path,
+    # and only that path, also needs `apt-get install graphviz`.
+    "graphviz==0.21",
     # --- Structured boundaries ---
     "pydantic==2.13.4",
     "numpy==2.4.6",  # latest numpy that still supports Python 3.11 (DLVM ships 3.11)

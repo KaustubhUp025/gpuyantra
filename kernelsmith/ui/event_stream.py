@@ -178,8 +178,22 @@ class EventStreamConsumer:
     reruns. The thread is a daemon: Streamlit's own shutdown does not wait on it.
     """
 
-    def __init__(self, thread_name: str = "kernelsmith-event-loop") -> None:
+    def __init__(
+        self,
+        thread_name: str = "kernelsmith-event-loop",
+        event_logger: Any = None,
+    ) -> None:
+        """
+        Args:
+            thread_name: Name of the background event-loop thread.
+            event_logger: Optional `EventLogger` (Task 12). When present, every event
+                is also written to its JSONL trace on the way past. Typed loosely so
+                this module keeps importing nothing at runtime; `log_event` is
+                documented never to raise, and is additionally guarded below, because
+                a logging failure must not end an agent run.
+        """
         self._queue: queue.Queue[Any] = queue.Queue()
+        self._event_logger = event_logger
         self._loop = asyncio.new_event_loop()
         self._loop_ready = threading.Event()
         self._lock = threading.Lock()
@@ -326,6 +340,7 @@ class EventStreamConsumer:
                 state_delta=state_delta or None,
             ):
                 self._queue.put(event)
+                self._capture(event)
         except asyncio.CancelledError:
             with self._lock:
                 self._error = "run cancelled"
@@ -338,6 +353,22 @@ class EventStreamConsumer:
             with self._lock:
                 self._running = False
                 self._runs_completed += 1
+
+    def _capture(self, event: Any) -> None:
+        """Write the event to the trace, if one is being recorded (Task 12).
+
+        Runs on the background thread, inside the `async for` that is draining the
+        agent run. `EventLogger.log_event` already swallows its own failures; this
+        second guard covers a logger that is not one — a stub in a test, or a future
+        implementation that forgets the contract. The queue has the event either way,
+        so a dropped trace line costs the recording, never the run.
+        """
+        if self._event_logger is None:
+            return
+        try:
+            self._event_logger.log_event(event)
+        except Exception:  # noqa: BLE001 — a trace is a recording, not a dependency
+            logger.exception("event capture failed")
 
     @staticmethod
     async def _ensure_session(runner: Runner, user_id: str, session_id: str) -> None:

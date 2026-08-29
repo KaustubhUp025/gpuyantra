@@ -1,6 +1,6 @@
 .PHONY: setup demo audit audit-all test test-unit test-int lint format seed-skill \
-        create-index serve-inference serve-ui harden unharden check-harden \
-        export-firestore
+        create-index serve-inference serve-ui serve-demo demo-with-dashboard \
+        harden unharden check-harden export-firestore
 
 # --- One-command setup (README "Quick start") -------------------------------
 # `uv sync --frozen` refuses to re-resolve: a fresh L4 gets the exact transitive
@@ -74,6 +74,37 @@ serve-inference:
 
 serve-ui:
 	uv run streamlit run kernelsmith/ui/streamlit_app.py --server.port 8501
+
+# --- Demo dashboard (Task 12) -----------------------------------------------
+# A SECOND Streamlit app, on a different port, for recording the video. The
+# operator dashboard on 8501 is untouched (CLAUDE.md rule 14) and the two run
+# side by side. `--theme.base dark` is not decoration: st.set_page_config has no
+# theme parameter, so this flag is the only thing that pins the dark theme for
+# someone whose Streamlit config defaults to light.
+serve-demo:
+	GOOGLE_CLOUD_PROJECT=gpuyantra \
+	  uv run streamlit run kernelsmith/ui/demo_dashboard.py \
+	  --server.port 8502 --theme.base dark
+
+# One command for the recording take: inference server, demo dashboard, then the
+# agent run whose events both the dashboard and data/traces/ pick up.
+#
+# The two servers are backgrounded from this recipe, so they are NOT children of
+# your shell and `make demo-with-dashboard` will not clean them up on Ctrl-C.
+# Stop them afterwards with:  pkill -f 'uvicorn kernelsmith' ; pkill -f demo_dashboard
+#
+# Run this on the VM: it wants the L4 for both the served model and the verifier.
+demo-with-dashboard:
+	@echo "=== 1/3 inference server on :8000 ==="
+	$(MAKE) serve-inference &
+	sleep 5
+	@echo "=== 2/3 demo dashboard on :8502 ==="
+	$(MAKE) serve-demo &
+	sleep 3
+	@echo "=== 3/3 agent run ==="
+	$(MAKE) demo
+	@echo "Demo complete. Dashboard at http://localhost:8502"
+	@echo "Trace saved to data/traces/"
 
 # --- Security (spec 12) -----------------------------------------------------
 # The verifier is the trust anchor: it is the only thing standing between a

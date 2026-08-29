@@ -42,6 +42,9 @@ make audit-all # Audit all registered models
 11. LayerNorm IS an nn.Module — do NOT reject it from adapter_mapping validation
 12. audit_model() must work on CPU (no GPU) using analytic FLOP/byte estimates
 13. MODEL_REGISTRY models must be ungated (no license acceptance required to download)
+14. Demo dashboard is demo_dashboard.py, NOT a modification to streamlit_app.py
+15. Event capture writes JSONL to data/traces/ — never capture to /tmp (lost on VM restart)
+16. graphviz system package must be installed for st.graphviz_chart
 
 ## Code Style
 

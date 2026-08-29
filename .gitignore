@@ -8,3 +8,9 @@ dist/
 .claude/settings.local.json
 .claude/*.local.json
 .venv/
+
+# Recorded agent traces. The committed sample_run.jsonl is the fallback demo and the
+# replay-test fixture; everything else here is one machine's run and must not be
+# committed — a stale trace in the repo is a demo that replays somebody else's numbers.
+data/traces/*.jsonl
+!data/traces/sample_run.jsonl
