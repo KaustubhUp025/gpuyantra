@@ -763,6 +763,7 @@ What the seven committed traces in `data/traces/` actually contain:
 | `demo-20260831-065705` | rmsnorm | +3 | 7.228 | 1.393 | 15/15 | ✅ **57 modules** | 0.0 |
 | `demo-20260831-081406` | rmsnorm | +3 | 7.224 | 1.393 | 15/15 | (no swap in trace) | — |
 | `demo-20260831-081623` | **layernorm** | +3 | **7.454** | 1.385 | 15/15 | ❌ `no module whose class name contains 'LayerNorm'` | **28.07** |
+| `demo-20260831-094045` | rmsnorm | +3 | 7.221 | 1.391 | 15/15 | ✅ **57 modules** | 0.0 (`tokens_total: 0`) |
 | `sample_run.jsonl` | rmsnorm | +3 | 7.24 | 1.39 | 15/15 | ✅ 57 modules | 22.9 (hand-written fixture) |
 
 Reading of the discrepancies, for the script:
@@ -778,12 +779,16 @@ Reading of the discrepancies, for the script:
   a zero-module success. That is the anti-fake-speedup guard firing in a real trace, and it
   is a *good* beat: the same trace still shows **28.07 tokens/s**, measured on the stock
   forwards.
-- **The one successful hot-swap trace (`065705`, 57 modules) reports `tokens_per_s: 0.0`,**
-  because `TokenMeter.record_swap` clears the rolling window at the swap instant and nothing
-  generated afterwards in that run. This is exactly what the Task 14 chat panel exists to
-  fix. **The live before/after throughput pair across a swap is still the one thing never
-  captured end to end in a committed trace** — record one with the chat panel before the
-  video.
+- **Both successful hot-swap traces (`065705` and `094045`, 57 modules each) report
+  `tokens_per_s: 0.0` with `tokens_total: 0`,** because `TokenMeter.record_swap` clears the
+  rolling window at the swap instant and nothing generated afterwards inside the run.
+- ⚠️ **The before/after throughput pair can never appear in a trace file, by design — do not
+  plan the video around capturing one.** `EventLogger.log_event` is called from exactly one
+  place, `EventStreamConsumer` (`event_stream.py:369`), on ADK events drained from
+  `Runner.run_async`. The chat panel's `send_prompt` POSTs straight to `/generate` and
+  `record_chat` writes only to `st.session_state` — no ADK event exists, so nothing reaches
+  the JSONL. **The pair exists only on screen, in Live mode, on the L4.** Film it; a replay
+  will never show it.
 - ⚠️ **Test count: the explorer's `HEADLINE.tests = "659"` is stale and understates the
   suite.** Measured 2026-08-31: `make test-unit` collects and passes **697** (the 607
   `def test_` functions across 27 files, expanded by parametrization). With the 18
@@ -1101,12 +1106,15 @@ by hand; there is no check that they agree.**
    dashboard and the GitHub repo are wired, and the dashboard also has a hero CTA (§9). The
    demo video and the technical write-up are still `todo: true`, because neither exists yet;
    fill them when they do. **The explorer must be re-deployed for this to be live.**
-2. **No committed trace shows a live before/after throughput pair across a hot-swap** (§10).
-   The successful-swap trace reports `0.0` tokens/s because the meter's window clears at the
-   swap. Record one with the Task 14 chat panel: ask before the run, run, ask after.
-3. **The newest trace is a layernorm run whose swap was refused** (correctly — Qwen2 has no
-   LayerNorm). `make deploy-dashboard` ships whatever is in `data/traces/`, and
-   `ordered_traces()` puts real captures first, so check which trace the hosted demo opens on.
+2. **The before/after throughput pair must be FILMED, not captured** (§10). Both
+   successful-swap traces report `0.0` tokens/s, and no trace ever can do better: chat
+   exchanges never become ADK events, so `EventLogger` never sees them. On the L4, in Live
+   mode: ask a preset question, run the optimization, ask again — and record the screen.
+3. **Pick the trace the hosted dashboard opens on.** `make deploy-dashboard` bakes in
+   whatever is in `data/traces/` and `ordered_traces()` puts real captures first, so the
+   default playback is whichever it ranks top — and the set includes a layernorm run whose
+   swap was correctly refused (Qwen2 has no LayerNorm module to match). `094045` is the
+   better opener: rmsnorm, +3, 57 modules patched, swap successful.
 4. **Test count is understated on a judge-facing surface.** `make test-unit` now collects
    **697**, not the explorer's 641; the headline should read 697 unit / 715 total (§10).
    Deliberately not changed here — it is a measured claim, and the 18 integration tests
