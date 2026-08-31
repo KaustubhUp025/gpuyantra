@@ -41,7 +41,9 @@
  *   the op two orders of magnitude below the ridge point. Do not "reconcile" them.
  *
  *   TODO — still open (search this file for "TODO(vm)"):
- *     3. LINKS                       — repo / video / blog URLs
+ *     3. LINKS                       — demo video and technical write-up URLs. The repo
+ *                                      and the live dashboard are wired; those two do
+ *                                      not exist yet and stay marked in the footer.
  */
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -510,9 +512,24 @@ const VERIFICATION = [
   },
 ];
 
-/* TODO(vm) #3 — real URLs. */
+/**
+ * Live on Cloud Run since 2026-08-31.
+ *
+ * The dashboard opens in REPLAY mode by itself and that is not a limitation to apologise
+ * for: the container has no GPU and no inference server, so `default_mode()` probes the
+ * inference port, finds nothing, and hands a visitor a Play button rather than a Live tab
+ * that could never start. Whatever is in `data/traces/` at image build time is what it can
+ * play, so re-deploy after capturing a new trace.
+ *
+ * TODO(vm) #3 — the demo video and the write-up do not exist yet. They stay `todo: true`,
+ * which renders an amber dot beside the label, rather than pointing somewhere plausible.
+ */
+const DASHBOARD_URL = "https://gpuyantra-dashboard-p6o5zbfooq-uc.a.run.app";
+const REPO_URL = "https://github.com/KaustubhUp025/gpuyantra";
+
 const LINKS = [
-  { label: "GitHub repository", href: "#", todo: true },
+  { label: "Watch the agent run", href: DASHBOARD_URL },
+  { label: "GitHub repository", href: REPO_URL },
   { label: "Demo video", href: "#", todo: true },
   { label: "Technical write-up", href: "#", todo: true },
 ];
@@ -864,13 +881,25 @@ function Hero() {
           <StatCard value={`${HEADLINE.models} models`} label="Audited end to end" note={HEADLINE.modelsNote} />
         </div>
 
-        <a
-          href="#audit"
-          className="mt-10 inline-flex items-center gap-2 rounded-md border border-[color:var(--ks-border-hi)] bg-[color:var(--ks-raised)] px-4 py-2.5 font-mono text-[13px] text-[color:var(--ks-text)] transition-colors hover:border-[color:var(--ks-accent)]/50"
-        >
-          See how it works
-          <span aria-hidden="true">↓</span>
-        </a>
+        <div className="mt-10 flex flex-wrap items-center gap-3">
+          <a
+            href="#audit"
+            className="inline-flex items-center gap-2 rounded-md border border-[color:var(--ks-border-hi)] bg-[color:var(--ks-raised)] px-4 py-2.5 font-mono text-[13px] text-[color:var(--ks-text)] transition-colors hover:border-[color:var(--ks-accent)]/50"
+          >
+            See how it works
+            <span aria-hidden="true">↓</span>
+          </a>
+          <a
+            href={DASHBOARD_URL}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-2 rounded-md border px-4 py-2.5 font-mono text-[13px] transition-colors hover:bg-[color:var(--ks-raised)]"
+            style={{ borderColor: "var(--ks-accent)", color: "var(--ks-accent)" }}
+          >
+            Watch the agent run
+            <span aria-hidden="true">↗</span>
+          </a>
+        </div>
 
         <div className="mt-16 border-t border-[color:var(--ks-border)] pt-6">
           <div className="font-mono text-[11px] uppercase tracking-[0.2em] text-[color:var(--ks-faint)]">
@@ -1517,6 +1546,8 @@ function Footer() {
                 <a
                   key={l.label}
                   href={l.href}
+                  target={l.todo ? undefined : "_blank"}
+                  rel="noreferrer"
                   className="font-mono text-[12.5px] text-[color:var(--ks-accent)] underline-offset-4 hover:underline"
                 >
                   {l.label}

@@ -681,13 +681,33 @@ with a `useRef` timer for the confirmation; a ~40-line in-file Triton tokenizer
 (`highlightTriton`) rather than an npm highlighter — one more package on the deploy path is
 one more thing that can break on demo day.
 
-### ⚠️ "Watch the Agent Run" link — **not present**
+### "Watch the agent run" → the hosted dashboard
 
-There is no link from the explorer to the hosted dashboard. `LINKS` is three entries all
-marked `todo: true` with `href: "#"` (GitHub repo, demo video, technical write-up), and the
-only other anchors are in-page (`#top`, `#audit`, …). **Before recording, add the
-`gpuyantra-dashboard` Cloud Run URL to `LINKS` and fill the three TODOs** — `grep TODO(vm)`
-finds them.
+Wired 2026-08-31. `DASHBOARD_URL` points at the Cloud Run service and is used twice: as a
+secondary CTA in the hero, beside the existing in-page `See how it works ↓`, and as the
+first entry in the footer's `LINKS`.
+
+```js
+const DASHBOARD_URL = "https://gpuyantra-dashboard-p6o5zbfooq-uc.a.run.app";
+const REPO_URL = "https://github.com/KaustubhUp025/gpuyantra";
+
+const LINKS = [
+  { label: "Watch the agent run", href: DASHBOARD_URL },
+  { label: "GitHub repository", href: REPO_URL },
+  { label: "Demo video", href: "#", todo: true },        // does not exist yet
+  { label: "Technical write-up", href: "#", todo: true },// does not exist yet
+];
+```
+
+**What a judge sees at the other end is a Play button, not a live run** — the dashboard
+container has no GPU and no inference server, so `default_mode()` probes the inference port,
+finds nothing, and opens in Replay. That is the designed behaviour for the hosted copy; it
+replays whatever was in `data/traces/` at image build time.
+
+The two remaining `todo: true` entries render an amber dot beside the label
+(`title="URL pending"`) rather than pointing somewhere plausible, and they deliberately do
+**not** get `target="_blank"` — an `href="#"` opening a blank tab is worse than an
+in-page no-op. Fill them once the video and the write-up exist; `grep TODO(vm)` finds them.
 
 ---
 
@@ -764,10 +784,13 @@ Reading of the discrepancies, for the script:
   fix. **The live before/after throughput pair across a swap is still the one thing never
   captured end to end in a committed trace** — record one with the chat panel before the
   video.
-- Test count: the explorer says **659** (641 unit + 18 integration); `tests/` currently
-  defines **607 `def test_` functions** across 27 files. Parametrization accounts for the
-  difference — re-run `make test-unit` and quote the collected number rather than the
-  header constant.
+- ⚠️ **Test count: the explorer's `HEADLINE.tests = "659"` is stale and understates the
+  suite.** Measured 2026-08-31: `make test-unit` collects and passes **697** (the 607
+  `def test_` functions across 27 files, expanded by parametrization). With the 18
+  integration tests that is **715 total**, against the explorer's claimed 659 (641 + 18).
+  The explorer was left unchanged — it is a measured claim and changing it is the owner's
+  call — but it should say 697/715 before recording, and the integration count wants a
+  re-run on the L4 to confirm it is still 18.
 
 ---
 
@@ -1074,12 +1097,17 @@ by hand; there is no check that they agree.**
 
 ## Loose ends worth closing before recording
 
-1. **`LINKS` in the explorer is three `href: "#"` TODOs** and there is no link to the hosted
-   dashboard (§9). Fill in repo, video, write-up, and add the `gpuyantra-dashboard` URL.
+1. ~~`LINKS` in the explorer is three `href: "#"` TODOs.~~ **Done 2026-08-31** — the hosted
+   dashboard and the GitHub repo are wired, and the dashboard also has a hero CTA (§9). The
+   demo video and the technical write-up are still `todo: true`, because neither exists yet;
+   fill them when they do. **The explorer must be re-deployed for this to be live.**
 2. **No committed trace shows a live before/after throughput pair across a hot-swap** (§10).
    The successful-swap trace reports `0.0` tokens/s because the meter's window clears at the
    swap. Record one with the Task 14 chat panel: ask before the run, run, ask after.
 3. **The newest trace is a layernorm run whose swap was refused** (correctly — Qwen2 has no
    LayerNorm). `make deploy-dashboard` ships whatever is in `data/traces/`, and
    `ordered_traces()` puts real captures first, so check which trace the hosted demo opens on.
-4. **Test count**: quote what `make test-unit` collects, not the explorer's 659 (§10).
+4. **Test count is understated on a judge-facing surface.** `make test-unit` now collects
+   **697**, not the explorer's 641; the headline should read 697 unit / 715 total (§10).
+   Deliberately not changed here — it is a measured claim, and the 18 integration tests
+   want a re-run on the L4 first.

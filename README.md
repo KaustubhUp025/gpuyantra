@@ -20,6 +20,24 @@ See [`docs/architecture.md`](docs/architecture.md) for the full design, and the
 
 ---
 
+## Live demo
+
+| | |
+|---|---|
+| **Dashboard** | <https://gpuyantra-dashboard-p6o5zbfooq-uc.a.run.app> |
+| **Results explorer** | <https://gpuyantra-explorer-p6o5zbfooq-uc.a.run.app> |
+
+Both are Cloud Run services, deployed from `make deploy-dashboard` / `make deploy-explorer`.
+
+The dashboard opens in **Replay** mode, and that is the intended behaviour rather than a
+degraded one: the container has no GPU and no inference server, so `default_mode()` probes
+the inference port, finds nothing, and offers a Play button instead of a Live tab that
+could never start. It replays whatever traces were in `data/traces/` when the image was
+built — re-deploy after capturing a new one. Live mode, the chat panel and the hot-swap
+need the L4; run `make demo-with-dashboard` there.
+
+---
+
 ## Prerequisites
 
 ### 1. Hardware
