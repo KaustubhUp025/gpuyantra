@@ -125,13 +125,15 @@ verifier's verdict, never from the model's prose summary.
 ```bash
 make setup            # one-command setup (above)
 make demo             # full reproducible demo; DEMO_ARGS=--no-server to skip the server
-make test-unit        # unit tests (no GPU, no network) — 317 tests
+make test-unit        # unit tests (no GPU, no network) — 641 tests
 make test-int         # integration tests (GPU + live Vertex AI + Firestore)
 make test             # both
 make lint             # ruff check + format --check
 make format           # ruff format
 make serve-inference  # FastAPI on :8000
-make serve-ui         # Streamlit dashboard on :8501
+make serve-ui         # operator dashboard (Streamlit) on :8501
+make serve-demo       # demo/recording dashboard on :8502 (live + replay)
+make deploy-dashboard # build + deploy the replay dashboard to Cloud Run
 make create-index     # ONCE: composite vector index on `skills` (minutes to build)
 make seed-skill       # insert the hand-written RMSNorm seed skill
 make harden           # chmod 444 the verifier scripts
@@ -139,6 +141,36 @@ make check-harden     # verify those modes; fails if any is writable
 make unharden         # chmod 644 — take the write bit back deliberately to edit one
 make export-firestore # snapshot skills + bandit state to GCS before recording a demo
 ```
+
+---
+
+## Measured results — NVIDIA L4, 2026-08-30
+
+One `make demo` on the L4 VM, server up, everything through the real agent tree:
+
+| | Measured |
+|---|---|
+| reward | **+3** (max) |
+| correctness | 15/15 — 5 seeds × 3 shapes, atol=rtol=1e-2 |
+| iterations | 1 of 6 (converged first try) |
+| speedup vs eager | **7.24×** |
+| speedup vs `torch.compile` | **1.39×** |
+| latency, headline shape `16x2048` | 1.246 ms, against 9.021 ms eager |
+| latency, `1x128` / `8x512` | 0.0123 ms / 0.129 ms |
+| bandit arm pulled | `rmsnorm_l4_single_pass_register_fused` |
+| hot-swap | **live — 57 `Qwen2RMSNorm` modules patched**, parity held, no rollback |
+| end-to-end `/generate` | 529 ms / 3 tokens before the swap → 87.5 ms / 2 tokens after, output coherent |
+| tests | 18 integration green on this L4 run; 641 unit tests green (the unit suite is hermetic and runs anywhere — the L4 session itself collected 572, before Tasks 12b and 13 added 69) |
+
+The end-to-end line is two single requests, not a sustained throughput curve — quoted as
+exactly that. It is the first time the swap has been observed on the served model rather
+than only in its parts, which closes the one item this README used to list as open.
+
+The CUDA-mode audit of the served model, measured on the same card (`make audit`):
+`Qwen2RMSNorm` × 57 at 0.83 FLOP/byte and **23%** of the L4's 300 GB/s — 121× below the
+ridge point of 101, and the top target of the sweep. GPT-2's `LayerNorm` (0.88, 93%) and
+ResNet-50's `BatchNorm2d` (0.88, 33%) are the top target in their models too: same
+roofline analysis, three architectures, the norm every time.
 
 ---
 
@@ -170,6 +202,10 @@ Measured back to back on 2026-08-28 (RTX A500, `--no-server`), same seed:
 
 Every number reproduces. The two things that moved are both explained, and neither is
 the model wandering.
+
+Those speedups are the **RTX A500's**, from a dev-box run without the inference server —
+they are a reproducibility measurement, not the headline. The L4 numbers are the ones in
+"Measured results" above (7.24× / 1.39×). Do not quote the two interchangeably.
 
 **The bandit arm differs by design.** Run 1 upserted the kernel it had just verified, and
 UCB1 gives an arm with zero pulls an unbounded exploration bonus — so run 2 was *supposed*

@@ -45,6 +45,10 @@ make audit-all # Audit all registered models
 14. Demo dashboard is demo_dashboard.py, NOT a modification to streamlit_app.py
 15. Event capture writes JSONL to data/traces/ — never capture to /tmp (lost on VM restart)
 16. graphviz system package must be installed for st.graphviz_chart
+17. Demo-dashboard event text goes through format_event_for_display() — and a
+    sentence may only interpolate a number the event payload actually carried
+18. Dockerfile.dashboard installs a slim pinned stack, NOT uv sync --frozen (no
+    torch/ADK in a replay-only container); keep its pins equal to pyproject's
 
 ## Code Style
 

@@ -1150,3 +1150,201 @@ NOT a page inside `streamlit_app.py`. `make serve-demo` runs it on :8502.
 The existing dashboard on :8501 is unchanged.
 
 *Source: Task 12.*
+
+---
+
+## The demo dashboard speaks English, and defaults to Replay wherever nothing is live (Task 12b)
+
+`demo_dashboard.py` worked and read like debug output: `st.status` labels said
+"Supervisor — Calling transfer_to_agent", every payload was an auto-expanded `st.json`,
+Tokens/s never left "—", and Iteration sat at "1/6" from the first Judge event to the end
+of the run. Five things changed, and one of them is a rule rather than a feature.
+
+**`format_event_for_display(event) -> {headline, detail, raw}`** is now the single place
+that decides what an event *says*. Every event gets a headline and two or three sentences;
+the raw payload moves behind a per-event "Show raw" fold (collapsed everywhere — the
+Judge's verdict opens as three `st.metric` cards instead, which is the same information in
+a form a 1080p capture can read). Four optional keys tell the renderer what body to draw:
+`code`, `prose`, `verdict`, `summary`.
+
+**The rule: a sentence may only interpolate a number the payload carried.** The task
+brief's own template for the profile row reads "57 instances, only using 23% of the L4's
+300 GB/s". Neither figure is in a `profile_op` response — they come from the audit table,
+which is a different estimator on a different probe shape — so the sentence was rewritten
+without them. Red line #3 is not only about the metric cards; a fluent sentence carrying a
+borrowed number is worse than a JSON dump, because nobody checks prose.
+`test_a_profile_result_invents_no_number_the_payload_did_not_carry` pins this.
+
+**Two ADK facts the renderer had to learn.** A `transfer_to_agent` *response* carries
+`{"result": null}` and duplicates the call above it; ADK also emits an empty `text` event
+to close a streamed turn. Both are dropped by `is_noise_event`. And `upsert_skill` /
+`explain_kernel` return a bare *string* inside the `{"result": ...}` envelope, so they are
+described before the dict guard — routed through it, the explanation rendered as "Result
+from explain_kernel" with two thousand words of Gemma as its subtitle.
+
+**Tokens/s: `0.0 or None` was the bug.** A reachable server with a cleared rolling window
+returns `0.0`, which `_as_float(...) or None` turned into "—" — a working metric that read
+as broken. `poll_stats` now records `stats_ok` separately, so "the server says zero" and
+"there is no server" render differently, and `merge_live_tokens` latches the pre-swap rate
+the last time the server answered before a swap landed (the only moment it can be
+observed) to show the jump as the metric's delta. A live `/stats` outranks the
+`hotswap_kernel` response's `stats`, because that snapshot is taken the instant
+`TokenMeter` clears its window — the least informative reading of the whole run.
+
+**Replay is the default wherever nothing is live.** `default_mode()` probes `/health`
+once (cached 10 s) and opens in Replay unless `--live` was passed, no traces exist, or a
+server answers. That is exactly the Cloud Run case: `Dockerfile.dashboard` bakes
+`data/traces/` into the image, so a judge opening the hosted URL gets a Play button rather
+than a Live tab that can never start. `ordered_traces()` puts real captured traces first
+and `sample_run.jsonl` last, because on a fresh clone every mtime is checkout time and
+"most recent" would otherwise be whichever file git wrote last.
+
+**`Dockerfile.dashboard` does NOT `uv sync --frozen`,** contrary to the task brief. The
+locked closure pins torch + triton + transformers + ADK — several GB of CUDA wheels on an
+image whose only job is to read a JSONL file. Replay mode imports none of them (torch and
+ADK are reached only inside `get_runner()`, i.e. Live mode), so the image installs four
+packages at the versions `pyproject.toml` pins: ~400 MB instead of ~6 GB. Keep the two
+lists in step by hand; there is no check that they agree.
+
+*Source: Task 12b, 2026-08-30.*
+
+---
+
+## `data/traces/` now holds a real L4 capture, and the fixture carries that run's numbers
+
+Two files, and the difference between them matters on demo day.
+
+`demo-20260830-101414-58bee2.jsonl` (23 events) is a **real capture** from the dashboard
+on the L4. It ends in `hot-swap refused — inference server unreachable`, honestly, because
+it was recorded with no server on :8000. The trace picker states that before anyone
+presses Play (`trace_summary` reads the hot-swap result out of the file), so the refusal
+is never a surprise at the end of a playback.
+
+`sample_run.jsonl` grew from 12 events to 17 and is still **hand-written**. Every number
+in it is now from the 2026-08-30 L4 session — reward +3, 7.24× / 1.39×, 15/15, 57 modules
+patched, 22.9 tokens/s — and it is labelled "hand-written fixture" in the picker for
+exactly that reason: real numbers, assembled structure. It grew because a fallback demo
+that stopped at the Judge was missing upsert, hot-swap and explain, which are the three
+beats the project's claim rests on.
+
+**For the hosted demo to show a live hot-swap, record a dashboard run on the L4 with the
+server up** (`make demo-with-dashboard`) and commit that trace. Until then the newest real
+trace ends in a refusal, and `make deploy-dashboard` ships that.
+
+*Source: Task 12b, 2026-08-30.*
+
+---
+
+## The demo page is written for the viewer, and a test enforces it
+
+Task 12b made the timeline readable; this pass made it *understandable by someone who has
+never written a GPU kernel*, which is a different bar. Everything a viewer reads by
+default now avoids the vocabulary of the field, while every measured number stays exactly
+where it was.
+
+What changed, in kind rather than in detail:
+
+- **Headlines say what happened, not what was called.** "⚖️ Verifying candidate kernel" →
+  "⚖️ Testing the new code". "🚀 Kernel is live!" → "🚀 The new code is running live".
+  "Reward +3: 7.24× vs eager" → "Score +3: 7.24× faster than PyTorch".
+- **The jargon is either replaced or explained in the same breath.** Arithmetic intensity
+  became "1.25 calculations per byte moved"; the ridge point became "this GPU needs about
+  101 before its maths units become the limit, so the chip is idle roughly 81× longer than
+  it needs to be"; UCB1 became "chosen the way you would choose between slot machines";
+  "5 seeds × 3 shapes" became "15 checks: 5 sets of random numbers at 3 different input
+  sizes"; `atol=0.01` became "to within one part in a hundred".
+- **Ops and families get a gloss.** `OP_IN_WORDS` / `FAMILY_IN_WORDS` turn `rmsnorm` into
+  "the step that rescales the numbers flowing between layers" and `op_family=norm` into
+  "Normalization". An op that is not in those tables is named plainly and *not* described
+  — an unfamiliar word beats a confident wrong one.
+- **`GLOSSARY` + `render_legend()`** define the five terms the page genuinely cannot avoid
+  (GPU kernel, memory-bound, Triton, PyTorch/its compiler, hot-swap), folded away so the
+  recording is not cluttered. Agent roles are job descriptions ("finds the slowest part"),
+  and metric cards carry `help` text in the same register.
+- **Metric labels are plain**: "vs eager" → "Faster than PyTorch", "vs torch.compile" →
+  "Faster than its compiler", "Correctness" → "Same answers", "Modules live" → "Layers now
+  live", "Show raw" → "Show the exact data behind this".
+
+`test_no_unexplained_jargon_reaches_the_default_view` walks **every event of every
+committed trace** and fails if a headline or detail line contains any of a banned list
+(`atol`, `rtol`, `do_bench`, `UCB1`, `arithmetic intensity`, `FLOP/byte`, `roofline`,
+`ridge point`, `eager`, `upsert`, `parity`, `bandit`, `escalat`, `AST`, `torch.compile`,
+…), with a companion check on `NARRATIVE`. That is the part worth keeping: the wording
+will drift the next time someone edits a sentence, and this is what notices.
+
+Note the one thing that did NOT change: no number was softened, rounded away or dropped
+to make a sentence read better. Plain language is a translation of the measurement, never
+a substitute for it.
+
+*Source: Task 12b language pass, 2026-08-31.*
+
+---
+
+## Task 13 — the container never ran, and the duplicate metrics row was a layout bug
+
+Seven fixes on deadline day. Two of them were real bugs with non-obvious causes; the rest
+was polish. No agent, verifier or memory code was touched.
+
+**The container had never actually run the app.** `streamlit run kernelsmith/ui/demo_dashboard.py`
+puts the SCRIPT's directory (`/app/kernelsmith/ui`) on `sys.path` — not the working
+directory — so `import kernelsmith` raised `ModuleNotFoundError` the moment a browser
+connected. The image built, started, and answered **HTTP 200** for Streamlit's shell page,
+which is exactly why the earlier `curl` gate passed it: the script only executes when a
+session opens, and the failure lived in the websocket, not in the HTTP response. Fixed
+with `ENV PYTHONPATH=/app`. Verified the way the bug actually manifests:
+`docker run -w /tmp <image> python -c "import kernelsmith"` — the foreign cwd is the
+point of the check. No import guards were needed: `demo_dashboard` → `event_capture` /
+`event_replay` / `config` is stdlib-only, and the container confirms `torch` and
+`google.adk` are absent from `sys.modules` after importing the dashboard.
+
+**Two metrics rows was not a double `render_header` call.** It was *conditional top-level
+elements*: the replay hero (pitch + Play button) existed in some runs and not others, so
+every element after it changed position between runs. During a playback — the one time two
+script runs genuinely overlap, because the old run is sleeping between events — Streamlit
+could not match the new run's elements to the old ones and left the stale header on
+screen, blank, under the live one. The fix is structural: `build_page_skeleton()` lays out
+the same seven regions in the same order in **both** modes and every run (header,
+orientation line, divider, notice, two columns, divider, banners), and regions that
+sometimes have nothing to say are `st.empty()` slots that get filled or cleared rather
+than elements that come and go. `render_live` and `render_replay` may no longer call
+`st.columns` or `st.divider` at all — `test_the_page_skeleton_is_the_same_element_sequence_in_both_modes`
+asserts that in the source, because reproducing the original needs two overlapping runs.
+
+**`use_container_width` → `width="stretch"`** in all seven call sites in
+`demo_dashboard.py`; a launch now logs zero deprecation lines.
+`test_the_dashboard_uses_no_deprecated_width_argument` greps the file. **`streamlit_app.py`
+still has ten of them** and was left alone: it is on Task 13's do-not-touch list, its
+warnings only fire in its own process (:8501), and `streamlit==1.62.0` is pinned, so
+nothing breaks today. Fix it whenever that file is next opened for another reason.
+
+**Tokens/s now says why it is empty.** A bare "—" could not be told apart from "not
+measured yet". When a run's swap failed, the card reads "—" with a `no server` delta and
+help text saying the kernel passed every test but was never deployed, and that nothing is
+estimated in its place. `extract_metrics` also reads an optional
+`stats.tokens_per_s_before` to show a real before/after delta — **defensively only**. The
+`/swap` response does not carry that field today, and Task 13 forbids touching server
+code, so no trace was given a fabricated one: the fixture's 22.9 stands alone, and the
+`--no-server` trace honestly shows nothing.
+
+**The chart is three bars and none of them is hardcoded.** PyTorch is 1.0 by definition;
+the compiler bar is `eager_ms / compile_ms` from the verdict's own baseline timings
+(falling back to `speedup_vs_eager / speedup_vs_compile`, the same quantity from the two
+reported ratios); the kernel bar is `speedup_vs_eager`. A verdict carrying neither gets
+**two** bars, not three with a guess in the middle. Rendered with altair — a Streamlit
+dependency, so it works in the slim container (verified: `vega_lite_chart` is on the page,
+not the `st.bar_chart` fallback) — into a slot that exists from the first frame, so it
+fills in when the Judge reports instead of shoving the page down.
+
+**The agent map got labels a viewer can read** ("Quality checker / decides when to stop",
+"Write → test loop / up to 6 attempts", edges "delegates to") and the active node now gets
+an outline as well as an amber fill, because at video bitrates on a dark theme a fill
+change alone is easy to miss. `GRAPH_NODES` carries `(id, shape, label)` — the id stays
+the ADK agent name, since events arrive under it. Labels may contain **no square
+bracket**: `highlight_active_agent` recolours a node by rewriting inside its `[...]`
+attribute list. Both the builder and the highlighter now go through one `_node_line()`,
+so the two can never draw the same agent differently.
+
+*Source: Task 13, 2026-08-31. Gates: 659 tests pass (641 unit + 18 integration, live
+Vertex/Firestore/GPU), `make lint` clean, a local launch logs no deprecation warnings, and
+the container builds (567 MB) and plays both committed traces end to end with one metrics
+row, the chart, and no exceptions.*

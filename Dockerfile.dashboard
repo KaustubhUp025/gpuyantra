@@ -1,0 +1,57 @@
+# The demo dashboard, in Replay mode, for Cloud Run (Task 12b, problem 6).
+#
+# Judges click a URL, press Play, and watch a recorded L4 run build itself — no GPU, no
+# Vertex AI, no Firestore, no credentials.
+#
+# WHY THIS DOES NOT `uv sync --frozen`
+# -----------------------------------
+# The task brief's Dockerfile installs the whole locked closure. That closure pins
+# torch==2.12.1 + triton + transformers + ADK — several GB of CUDA wheels, on an image
+# whose only job is to read a JSONL file and draw it. Replay mode imports none of them:
+# `demo_dashboard.py` reaches for torch and ADK only inside `get_runner()`, which is
+# Live mode, which needs the GPU this container does not have.
+#
+# So the install list below is explicit, and every version is copied from
+# pyproject.toml's pins rather than floated — same versions as the VM, ~400 MB instead
+# of ~6 GB, and a build that finishes inside a Cloud Build default timeout.
+#
+#   make deploy-dashboard      # build, push, deploy
+#
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Pins mirror pyproject.toml exactly. Keep them in step: if the dashboard stack moves
+# there, it moves here.
+RUN pip install --no-cache-dir \
+      streamlit==1.62.0 \
+      streamlit-autorefresh==1.0.1 \
+      httpx==0.28.1 \
+      python-dotenv==1.2.3
+
+# The package, the traces, and the Streamlit config. No tests, no scripts, no .env —
+# the container holds nothing secret and nothing it does not render.
+COPY kernelsmith/ kernelsmith/
+COPY data/traces/ data/traces/
+COPY .streamlit/ .streamlit/
+
+# PYTHONPATH is load-bearing, not tidiness. `streamlit run kernelsmith/ui/demo_dashboard.py`
+# puts the SCRIPT's directory (/app/kernelsmith/ui) on sys.path, not the working
+# directory, so `import kernelsmith` raised ModuleNotFoundError the moment a browser
+# connected and the script actually ran. The container still answered HTTP 200 for the
+# Streamlit shell page, which is why a curl check missed it.
+#
+# `config.py` reads GOOGLE_CLOUD_PROJECT strictly at import (`os.environ[...]`), and every
+# code path in the dashboard imports it. Non-secret: it is the project id, which is in the
+# README. No credentials are mounted, so nothing in the container can act on the project.
+ENV PYTHONPATH=/app \
+    GOOGLE_CLOUD_PROJECT=gpuyantra \
+    PYTHONUNBUFFERED=1
+
+# Cloud Run injects $PORT (8080 by default) and expects the process to honour it.
+ENV PORT=8080
+EXPOSE 8080
+
+# No --live flag, so `default_mode()` probes for an inference server, finds none, and
+# opens in Replay with the newest trace selected.
+CMD ["sh", "-c", "streamlit run kernelsmith/ui/demo_dashboard.py --server.port=${PORT} --server.address=0.0.0.0 --theme.base=dark"]

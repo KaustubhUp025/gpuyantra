@@ -212,9 +212,24 @@ def test_list_traces_on_a_missing_directory_is_empty_not_an_error(tmp_path: Path
 # --------------------------------------------------------------------------- #
 
 
-def test_the_sample_trace_exists_and_has_twelve_events():
+def test_the_sample_trace_exists_and_covers_the_whole_protocol():
+    """17 events: every beat of a run, not only the ones up to the verdict.
+
+    It grew from 12 in Task 12b. A fallback demo that stopped at the Judge was missing
+    the three steps the project's claim actually rests on — upsert, hot-swap, explain —
+    so if the live run failed on camera, the fixture could not stand in for it.
+    """
     assert SAMPLE.exists(), f"{SAMPLE} is the recorded fallback demo and must be committed"
-    assert len(load_events(SAMPLE)) == 12
+    events = load_events(SAMPLE)
+    assert len(events) == 17
+    tools = {response["name"] for event in events for response in event["function_responses"]}
+    assert tools == {
+        "profile_op_by_name",
+        "retrieve_skills_for_agent",
+        "verify_kernel",
+        "upsert_skill",
+        "hotswap_kernel",
+    }
 
 
 def test_the_sample_trace_exercises_every_event_type():
@@ -225,8 +240,56 @@ def test_the_sample_trace_exercises_every_event_type():
 
 
 def test_the_sample_trace_has_the_recorded_timings():
-    expected = [0.0, 0.8, 1.2, 2.1, 2.3, 2.5, 4.0, 8.5, 12.0, 12.2, 13.0, 13.5]
+    expected = [
+        0.0,
+        0.8,
+        1.2,
+        2.1,
+        2.3,
+        3.0,
+        3.6,
+        4.0,
+        6.5,
+        11.0,
+        26.0,
+        26.4,
+        30.0,
+        30.4,
+        33.0,
+        34.2,
+        36.0,
+    ]
     assert [e["elapsed_s"] for e in load_events(SAMPLE)] == expected
+
+
+def test_the_sample_traces_numbers_are_the_measured_l4_ones():
+    """The fixture is hand-written; its numbers are not invented.
+
+    Every one of them comes from the 2026-08-30 L4 session (`vm_session_results.md`):
+    reward +3, 7.24x vs eager, 1.39x vs torch.compile, 15/15 correctness, and a
+    hot-swap that patched all 57 `Qwen2RMSNorm` modules. A fixture that quoted a
+    speedup nothing ever measured would be the exact failure this project's red line
+    #3 exists to prevent.
+    """
+    verdict = next(
+        response["response"]
+        for event in load_events(SAMPLE)
+        for response in event["function_responses"]
+        if response["name"] == "verify_kernel"
+    )
+    assert verdict["reward"] == 3
+    assert verdict["speedup_vs_eager"] == 7.24
+    assert verdict["speedup_vs_compile"] == 1.39
+    assert (verdict["passed_checks"], verdict["total_checks"]) == (15, 15)
+
+    swap = next(
+        response["response"]
+        for event in load_events(SAMPLE)
+        for response in event["function_responses"]
+        if response["name"] == "hotswap_kernel"
+    )
+    assert swap["success"] is True
+    assert swap["modules_patched"] == 57
 
 
 def test_every_line_of_the_sample_trace_carries_the_full_record_shape():
@@ -250,5 +313,5 @@ def test_every_line_of_the_sample_trace_carries_the_full_record_shape():
 
 def test_the_sample_trace_replays_in_under_a_second_at_instant_speed():
     sleep = FakeSleep()
-    assert len(list(replay_events(SAMPLE, speed=0, sleep=sleep))) == 12
+    assert len(list(replay_events(SAMPLE, speed=0, sleep=sleep))) == 17
     assert sleep.delays == []

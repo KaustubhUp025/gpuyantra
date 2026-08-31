@@ -14,19 +14,26 @@
  * that no number is printed as measured unless it was. The UI honours that: a
  * null renders as "n/a", never as 0 and never as a plausible-looking guess.
  *
- *   REAL — captured 2026-08-30, dev box:
- *     AUDIT_DATA          `run_demo audit --all` (CPU/meta-device mode)
- *     KERNEL_SOURCE       scripts/seed_skill.py :: RMSNORM_KERNEL_SOURCE
- *     ADAPTER_BINDINGS    live Coder output, Task 8
- *     TRANSFER            live Firestore query, Task 10
- *     HEADLINE.tests      468 unit + 18 integration, `make test-unit`
- *     HEADLINE.speedup    L4 VM, Task 8, after the baseline-fairness fix
+ *   REAL — captured 2026-08-30 on the L4 VM (`vm_session_results.md`):
+ *     AUDIT_DATA          `run_demo audit --model <id> --device cuda`, all three models.
+ *                         AI analytic, `bw_pct` MEASURED with do_bench against the L4's
+ *                         own 300.1 GB/s — the one machine where that denominator is right.
+ *     KERNEL_SOURCE       the kernel the Coder wrote in that run, verbatim; the one the
+ *                         Judge scored +3 and the server hot-swapped across 57 modules
+ *     RESULT / TRACE      `verify_kernel` verdict of that run (reward +3, 7.24x / 1.39x)
+ *     EXPLANATION         gemma-4-26b-a4b-it-maas output from that run, condensed to four
+ *                         paragraphs; the sentences are the model's own
+ *     ADAPTER_BINDINGS    live Coder output, Task 8, unchanged in this run
+ *     TRANSFER            live Firestore query, 2026-08-30
+ *     HEADLINE.tests      641 unit + 18 integration, `make test-unit` / `make test-int`
  *
- *   TODO — replace after the L4 VM session (search this file for "TODO(vm)"):
- *     1. bw_pct on each audit entry  — CUDA-mode `do_bench`, must be run ON the L4
- *        (the BW% denominator is the L4's 300.1 GB/s; measured anywhere else it is
- *        wrong, which is why every entry is null today rather than a borrowed number)
- *     2. EXPLANATION.body            — the Gemma 4 26B kernel explanation from a real run
+ *   Two arithmetic-intensity numbers appear in this file and they disagree on purpose:
+ *   the audit's estimator counts traffic PER TENSOR TOUCHED by an unfused eager
+ *   implementation (RMSNorm 0.83 in fp16), the profiler's counts the MINIMUM a fused
+ *   kernel must move (1.25). The profiler's is the one Firestore is keyed on. Both put
+ *   the op two orders of magnitude below the ridge point. Do not "reconcile" them.
+ *
+ *   TODO — still open (search this file for "TODO(vm)"):
  *     3. LINKS                       — repo / video / blog URLs
  */
 
@@ -37,10 +44,10 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
    ══════════════════════════════════════════════════════════════════════════ */
 
 const HEADLINE = {
-  speedup: "6.92×",
-  speedupNote: "vs eager PyTorch · NVIDIA L4",
-  tests: "486",
-  testsNote: "468 unit + 18 integration, all green",
+  speedup: "7.24×",
+  speedupNote: "vs eager PyTorch · NVIDIA L4 · 1.39× vs torch.compile",
+  tests: "659",
+  testsNote: "641 unit (hermetic) + 18 integration on the L4",
   models: "3",
   modelsNote: "decoder, classic decoder, vision — one analysis",
 };
@@ -64,12 +71,20 @@ const BUILT_WITH = [
 ];
 
 /**
- * Real output of `uv run python -m kernelsmith.run_demo audit --all`, 2026-08-30.
+ * Real output of `run_demo audit --model <id> --device cuda`, run ON the L4 VM,
+ * 2026-08-30. This replaces the earlier CPU/meta-device sweep.
  *
- * mode "cpu" means the module tree was built on the meta device from config.json —
- * zero weights downloaded, zero bytes allocated, and the tree is exact. Arithmetic
- * intensity is analytic in both modes; bandwidth is only available under CUDA, which
- * is why every `bw_pct` here is null. See TODO(vm) #1.
+ * mode "cuda" means: the module tree and the arithmetic intensity are analytic (exactly
+ * as in CPU mode — AI is computed from shapes, never measured), and `bw_pct` is MEASURED
+ * with `triton.testing.do_bench` on one representative instance of each unique module
+ * type. The denominator is the L4's own 300.1 GB/s, so these percentages mean what they
+ * say for the first time — measured on any other card they would not.
+ *
+ * The AI values therefore differ from the CPU sweep this file used to carry (RMSNorm
+ * 0.42 -> 0.83, LayerNorm 0.44 -> 0.88). Not a correction of a bug: CPU mode estimates
+ * at fp32 and CUDA mode at fp16, and halving the bytes doubles the intensity. Both put
+ * every norm two orders of magnitude below the ridge point, which is the only question
+ * the triage table asks.
  */
 const AUDIT_DATA = {
   "qwen2.5-1.5b": {
@@ -83,22 +98,22 @@ const AUDIT_DATA = {
     hidden_size: 1536,
     total_modules: 367,
     unique_types: 8,
-    mode: "cpu",
-    measured: false,
+    mode: "cuda",
+    measured: true,
     served: true,
     entries: [
-      { type: "Qwen2RMSNorm", count: 57, regime: "memory", ai: 0.42, bw_pct: null, priority: "HIGH" },
-      { type: "SiLUActivation", count: 28, regime: "memory", ai: 0.38, bw_pct: null, priority: "HIGH" },
-      { type: "Linear", count: 196, regime: "compute", ai: 154, bw_pct: null, priority: "LOW" },
-      { type: "Qwen2Attention", count: 28, regime: "compute", ai: 134, bw_pct: null, priority: "LOW" },
-      { type: "Qwen2DecoderLayer", count: 28, regime: "compute", ai: 162, bw_pct: null, priority: "LOW" },
-      { type: "Qwen2MLP", count: 28, regime: "compute", ai: 179, bw_pct: null, priority: "LOW" },
+      { type: "Qwen2RMSNorm", count: 57, regime: "memory", ai: 0.83, bw_pct: 23, priority: "HIGH" },
+      { type: "SiLUActivation", count: 28, regime: "memory", ai: 0.75, bw_pct: 68, priority: "HIGH" },
+      { type: "Linear", count: 196, regime: "compute", ai: 307, bw_pct: 51, priority: "LOW" },
+      { type: "Qwen2Attention", count: 28, regime: "compute", ai: 269, bw_pct: null, priority: "LOW" },
+      { type: "Qwen2DecoderLayer", count: 28, regime: "compute", ai: 323, bw_pct: null, priority: "LOW" },
+      { type: "Qwen2MLP", count: 28, regime: "compute", ai: 358, bw_pct: 47, priority: "LOW" },
       { type: "Embedding", count: 1, regime: null, ai: null, bw_pct: null, priority: "LOW" },
       { type: "Qwen2RotaryEmbedding", count: 1, regime: null, ai: null, bw_pct: null, priority: "LOW" },
     ],
     top_target: "Qwen2RMSNorm",
     recommendation:
-      "Start with Qwen2RMSNorm: 57 memory-bound instances at 0.42 FLOP/byte, 242× below the L4 ridge point of 101 — a fused single-pass Triton kernel recovers the traffic the unfused version wastes.",
+      "Start with Qwen2RMSNorm: 57 memory-bound instances at 0.83 FLOP/byte, 121× below the L4 ridge point of 101, and measured at 23% of the card's bandwidth — a fused single-pass Triton kernel recovers the traffic the unfused version wastes.",
   },
   gpt2: {
     model_name: "openai-community/gpt2",
@@ -111,22 +126,22 @@ const AUDIT_DATA = {
     hidden_size: 768,
     total_modules: 160,
     unique_types: 8,
-    mode: "cpu",
-    measured: false,
+    mode: "cuda",
+    measured: true,
     served: false,
     entries: [
-      { type: "LayerNorm", count: 25, regime: "memory", ai: 0.44, bw_pct: null, priority: "HIGH" },
-      { type: "NewGELUActivation", count: 12, regime: "memory", ai: 0.38, bw_pct: null, priority: "HIGH" },
-      { type: "Conv1D", count: 48, regime: "compute", ai: 136, bw_pct: null, priority: "LOW" },
-      { type: "GPT2Attention", count: 12, regime: "compute", ai: 128, bw_pct: null, priority: "LOW" },
-      { type: "GPT2MLP", count: 12, regime: "compute", ai: 128, bw_pct: null, priority: "LOW" },
-      { type: "GPT2Block", count: 12, regime: "compute", ai: 105, bw_pct: null, priority: "LOW" },
+      { type: "LayerNorm", count: 25, regime: "memory", ai: 0.88, bw_pct: 93, priority: "HIGH" },
+      { type: "NewGELUActivation", count: 12, regime: "memory", ai: 0.75, bw_pct: 16, priority: "HIGH" },
+      { type: "Conv1D", count: 48, regime: "compute", ai: 271, bw_pct: 42, priority: "LOW" },
+      { type: "GPT2Attention", count: 12, regime: "compute", ai: 256, bw_pct: 36, priority: "LOW" },
+      { type: "GPT2MLP", count: 12, regime: "compute", ai: 256, bw_pct: 42, priority: "LOW" },
+      { type: "GPT2Block", count: 12, regime: "compute", ai: 210, bw_pct: 53, priority: "LOW" },
       { type: "Dropout", count: 37, regime: null, ai: null, bw_pct: null, priority: "LOW" },
       { type: "Embedding", count: 2, regime: null, ai: null, bw_pct: null, priority: "LOW" },
     ],
     top_target: "LayerNorm",
     recommendation:
-      "Start with LayerNorm: 25 memory-bound instances at 0.44 FLOP/byte, 231× below the L4 ridge point of 101 — a fused single-pass Triton kernel recovers the traffic the unfused version wastes.",
+      "Start with LayerNorm: 25 memory-bound instances at 0.88 FLOP/byte, 115× below the L4 ridge point of 101 — a fused single-pass Triton kernel recovers the traffic the unfused version wastes.",
   },
   resnet50: {
     model_name: "microsoft/resnet-50",
@@ -139,26 +154,26 @@ const AUDIT_DATA = {
     hidden_size: 2048,
     total_modules: 260,
     unique_types: 12,
-    mode: "cpu",
-    measured: false,
+    mode: "cuda",
+    measured: true,
     served: false,
     entries: [
-      { type: "BatchNorm2d", count: 53, regime: "memory", ai: 0.44, bw_pct: null, priority: "HIGH" },
-      { type: "ReLU", count: 49, regime: "memory", ai: 0.12, bw_pct: null, priority: "HIGH" },
-      { type: "Conv2d", count: 53, regime: "memory", ai: 53.45, bw_pct: null, priority: "MEDIUM" },
-      { type: "ResNetEncoder", count: 1, regime: "memory", ai: 12.03, bw_pct: null, priority: "MEDIUM" },
-      { type: "ResNetStage", count: 4, regime: "memory", ai: 7.75, bw_pct: null, priority: "MEDIUM" },
-      { type: "ResNetBottleNeckLayer", count: 16, regime: "memory", ai: 6.97, bw_pct: null, priority: "MEDIUM" },
-      { type: "ResNetShortCut", count: 4, regime: "memory", ai: 6.4, bw_pct: null, priority: "MEDIUM" },
-      { type: "ResNetConvLayer", count: 49, regime: "memory", ai: 1.45, bw_pct: null, priority: "MEDIUM" },
-      { type: "ResNetEmbeddings", count: 1, regime: "memory", ai: 1.45, bw_pct: null, priority: "MEDIUM" },
+      { type: "BatchNorm2d", count: 53, regime: "memory", ai: 0.88, bw_pct: 33, priority: "HIGH" },
+      { type: "ReLU", count: 49, regime: "memory", ai: 0.25, bw_pct: 57, priority: "HIGH" },
+      { type: "ResNetEncoder", count: 1, regime: "memory", ai: 24.06, bw_pct: null, priority: "MEDIUM" },
+      { type: "ResNetStage", count: 4, regime: "memory", ai: 15.51, bw_pct: null, priority: "MEDIUM" },
+      { type: "ResNetBottleNeckLayer", count: 16, regime: "memory", ai: 13.94, bw_pct: null, priority: "MEDIUM" },
+      { type: "ResNetShortCut", count: 4, regime: "memory", ai: 12.81, bw_pct: null, priority: "MEDIUM" },
+      { type: "ResNetConvLayer", count: 49, regime: "memory", ai: 2.9, bw_pct: null, priority: "MEDIUM" },
+      { type: "ResNetEmbeddings", count: 1, regime: "memory", ai: 2.9, bw_pct: null, priority: "MEDIUM" },
+      { type: "Conv2d", count: 53, regime: "compute", ai: 107, bw_pct: 2, priority: "LOW" },
       { type: "Identity", count: 28, regime: null, ai: null, bw_pct: null, priority: "LOW" },
       { type: "AdaptiveAvgPool2d", count: 1, regime: null, ai: null, bw_pct: null, priority: "LOW" },
       { type: "MaxPool2d", count: 1, regime: null, ai: null, bw_pct: null, priority: "LOW" },
     ],
     top_target: "BatchNorm2d",
     recommendation:
-      "Start with BatchNorm2d: 53 memory-bound instances at 0.44 FLOP/byte, 231× below the L4 ridge point of 101 — a fused single-pass Triton kernel recovers the traffic the unfused version wastes.",
+      "Start with BatchNorm2d: 53 memory-bound instances at 0.88 FLOP/byte, 115× below the L4 ridge point of 101 — a fused single-pass Triton kernel recovers the traffic the unfused version wastes.",
   },
 };
 
@@ -187,14 +202,17 @@ const TRACE = [
     action: "Measures the op and emits a bottleneck fingerprint",
     summary: "Roofline analysis, not a name lookup. The fingerprint IS the retrieval key.",
     body:
-      "Arithmetic intensity 0.4 FLOP/byte against an L4 ridge point of 101 — memory-bound " +
-      "by two orders of magnitude. The fingerprint deliberately carries no operator name " +
-      "and no model name: it describes WHY the op is slow, which is the only property that " +
-      "transfers between architectures.",
-    fingerprint: "op=norm mem_bound=True ai=0.4 tile=1024 hw=L4",
+      "Arithmetic intensity 1.25 FLOP/byte against an L4 ridge point of 101 — memory-bound " +
+      "by two orders of magnitude, moving 40.7 GB/s of the card's 300. The fingerprint " +
+      "deliberately carries no operator name and no model name: it describes WHY the op is " +
+      "slow, which is the only property that transfers between architectures. (The audit " +
+      "table above reads 0.83 for the same op: a different estimator, counting what an " +
+      "unfused eager implementation moves rather than the minimum a fused kernel must.)",
+    fingerprint: "op=norm mem_bound=True ai=1.2 tile=1024 hw=L4",
     output: [
       ["op_family", "norm"],
-      ["arithmetic_intensity", "0.42 FLOP/byte"],
+      ["arithmetic_intensity", "1.25 FLOP/byte"],
+      ["memory_throughput", "40.7 GB/s"],
       ["is_memory_bound", "true"],
       ["tile_size_hint", "1024"],
       ["hardware", "L4"],
@@ -213,8 +231,9 @@ const TRACE = [
     output: [
       ["pre_filter", "op_family=norm AND hardware=L4"],
       ["top_k", "3"],
-      ["selected_arm", "rmsnorm_fp16_l4_v1"],
-      ["arm_stats", "3 pulls · mean reward 3.0"],
+      ["retrieved", "3 · nearest at distance 0.0"],
+      ["selected_arm", "rmsnorm_l4_single_pass_fused"],
+      ["arm_stats", "1 pull · mean reward 3.0"],
     ],
   },
   {
@@ -229,8 +248,8 @@ const TRACE = [
       "has a human write that bridge.",
     output: [
       ["entrypoint", "rmsnorm_triton"],
-      ["strategy", "two-pass row reduction, fp32 accumulate"],
-      ["BLOCK_SIZE", "min(next_pow2(H), 1024)"],
+      ["strategy", "single-pass row reduction, x held in registers, fp32 accumulate"],
+      ["BLOCK_SIZE", "next_pow2(N) · num_warps 8 at 2048"],
       ["adapter_mapping", "weight→weight, eps→variance_epsilon"],
     ],
   },
@@ -249,8 +268,9 @@ const TRACE = [
       ["static_ast_check", "pass — 0 of 7 hack patterns"],
       ["adapter_validation", "pass — attrs exist on Qwen2RMSNorm"],
       ["correctness", "15/15 · 5 seeds × 3 shapes · atol=rtol=1e-2"],
-      ["speedup_vs_eager", "6.92×"],
-      ["speedup_vs_torch_compile", "1.36×"],
+      ["speedup_vs_eager", "7.24×"],
+      ["speedup_vs_torch_compile", "1.39×"],
+      ["headline_shape", "16×2048 · 1.246 ms vs 9.021 ms eager"],
       ["reward", "+3"],
     ],
   },
@@ -268,7 +288,7 @@ const TRACE = [
     output: [
       ["iteration", "1 of 6"],
       ["decision", "escalate — target met"],
-      ["bandit_credit", "rmsnorm_fp16_l4_v1 ← +3"],
+      ["bandit_credit", "rmsnorm_l4_single_pass_fused ← +3"],
     ],
   },
   {
@@ -283,23 +303,32 @@ const TRACE = [
       "TokenMeter clears its rolling window at the swap boundary so the throughput chart " +
       "shows the discontinuity instead of averaging across it.",
     output: [
-      ["skill_upserted", "skills/rmsnorm_fp16_l4_v1"],
+      ["skill_upserted", "skills/rmsnorm_l4_single_pass_register_fused"],
       ["modules_patched", "57 / 57"],
       ["adapter_path", "generic (declared contract)"],
-      ["parity_gate", "pass"],
+      ["parity_gate", "pass · 5 seeds on the live weights"],
+      ["end_to_end", "529 ms / 3 tokens → 87.5 ms / 2 tokens"],
     ],
   },
 ];
 
 const RESULT = {
   reward: "+3",
-  vs_eager: "6.92×",
-  vs_compile: "1.36×",
+  vs_eager: "7.24×",
+  vs_compile: "1.39×",
   iterations: "1 of 6",
   correctness: "15/15",
 };
 
-/** Verbatim from scripts/seed_skill.py — the kernel the library was seeded with. */
+/**
+ * Verbatim from the 2026-08-30 L4 run: the kernel the Coder wrote, the Judge scored +3,
+ * and the server hot-swapped across all 57 Qwen2RMSNorm modules.
+ *
+ * Single pass, not two: the row is loaded once and kept in registers for both the
+ * variance reduction and the scaling, which is the whole point on an op that is
+ * bandwidth-bound. BLOCK_SIZE is the next power of two above N (1536 -> 2048), so the
+ * row fits one tile and there is no loop to write.
+ */
 const KERNEL_SOURCE = `import torch
 import triton
 import triton.language as tl
@@ -308,64 +337,66 @@ import triton.language as tl
 @triton.jit
 def _rmsnorm_fwd(
     X, W, Y,
-    stride_row,
+    stride_x_row,
+    stride_y_row,
     N,
     eps,
     BLOCK_SIZE: tl.constexpr,
 ):
-    """One program per row. Two-pass over the row so N may exceed BLOCK_SIZE."""
     row = tl.program_id(0)
-    X += row * stride_row
-    Y += row * stride_row
+    cols = tl.arange(0, BLOCK_SIZE)
+    mask = cols < N
 
-    acc = tl.zeros([BLOCK_SIZE], dtype=tl.float32)
-    for off in range(0, N, BLOCK_SIZE):
-        cols = off + tl.arange(0, BLOCK_SIZE)
-        mask = cols < N
-        x = tl.load(X + cols, mask=mask, other=0.0).to(tl.float32)
-        acc += x * x
-    # Reduce in fp32: matching eager requires mean(x^2) + eps BEFORE the rsqrt.
-    inv_rms = 1.0 / tl.sqrt(tl.sum(acc, axis=0) / N + eps)
+    x_ptrs = X + row * stride_x_row + cols
+    y_ptrs = Y + row * stride_y_row + cols
+    w_ptrs = W + cols
 
-    for off in range(0, N, BLOCK_SIZE):
-        cols = off + tl.arange(0, BLOCK_SIZE)
-        mask = cols < N
-        x = tl.load(X + cols, mask=mask, other=0.0).to(tl.float32)
-        w = tl.load(W + cols, mask=mask, other=0.0).to(tl.float32)
-        tl.store(Y + cols, (x * inv_rms * w).to(Y.dtype.element_ty), mask=mask)
+    # Single-pass load keeps x in registers, avoiding redundant DRAM round-trips
+    x = tl.load(x_ptrs, mask=mask, other=0.0).to(tl.float32)
+    var = tl.sum(x * x, axis=0) / N
+    rsqrt = 1.0 / tl.sqrt(var + eps)
+
+    w = tl.load(w_ptrs, mask=mask, other=0.0).to(tl.float32)
+    y = (x * rsqrt * w).to(Y.dtype.element_ty)
+    tl.store(y_ptrs, y, mask=mask)
 
 
 def rmsnorm_triton(x: torch.Tensor, weight: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
-    """Drop-in for Qwen2RMSNorm.forward. Accepts [..., H], returns the same shape."""
     orig_shape = x.shape
     x2d = x.reshape(-1, orig_shape[-1]).contiguous()
     M, N = x2d.shape
     y = torch.empty_like(x2d)
 
-    BLOCK_SIZE = min(triton.next_power_of_2(N), 1024)
-    num_warps = 8 if BLOCK_SIZE >= 1024 else 4
+    BLOCK_SIZE = triton.next_power_of_2(N)
+    num_warps = 8 if BLOCK_SIZE >= 2048 else (4 if BLOCK_SIZE >= 512 else 2)
 
     _rmsnorm_fwd[(M,)](
         x2d, weight.contiguous(), y,
         x2d.stride(0),
+        y.stride(0),
         N,
-        eps,
+        float(eps),
         BLOCK_SIZE=BLOCK_SIZE,
         num_warps=num_warps,
     )
     return y.reshape(orig_shape)`;
 
-/* TODO(vm) #2 — replace with the Gemma 4 26B explanation from a real run. */
+/**
+ * The bonus agent's real output from the 2026-08-30 L4 run, condensed from its markdown
+ * to four paragraphs. The sentences are Gemma's; nothing here is a paraphrase written by
+ * a human, and nothing is a placeholder.
+ */
 const EXPLANATION = {
   model: "gemma-4-26b-a4b-it-maas",
-  placeholder: true,
+  placeholder: false,
   paragraphs: [
-    "Eager RMSNorm makes four round-trips to HBM for every row: square, mean, reciprocal-square-root, then the weight multiply. Each one reads the row back out of memory and writes it again. At 1536 elements in fp16 that is roughly 24 KB of traffic per row for about 7,700 useful floating-point operations — 0.42 FLOP per byte, against an L4 that needs 101 before its arithmetic units become the limit.",
-    "This kernel launches one program per row and touches the row exactly twice. The first pass accumulates the sum of squares into an fp32 register tile; the second re-reads the row, applies the reciprocal square root and the weight, and stores in the input dtype. Nothing intermediate is ever written to global memory.",
-    "The fp32 accumulator is a correctness requirement, not an optimization. Qwen2RMSNorm computes mean(x²) + eps in fp32 before the rsqrt, and accumulating in fp16 drifts far enough on the 16×2048 shape to fail the 1e-2 tolerance gate. BLOCK_SIZE is capped at 1024 because a wider tile spills registers on the L4's 48 KB of shared memory per SM.",
+    "This code implements RMSNorm (Root Mean Square Layer Normalization), a popular normalization technique used in modern LLMs. The kernel treats each row of the input matrix as an independent task: it launches M instances of the function, one per row. For a specific row it loads all N elements into high-speed on-chip memory, calculates the mean of the squares, computes the reciprocal square root, then multiplies the original values by that and by the weight vector before writing the result back to global memory.",
+    "In eager PyTorch, `y = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps) * w` is executed as a sequence of discrete kernels: compute x² and write it to VRAM; read that back to compute the mean and write it; read that to compute rsqrt and write it; read x, rsqrt and w to multiply and write y. Modern GPUs are significantly faster at math than they are at moving data — the memory wall — so eager PyTorch here is memory-bandwidth bound, spending most of its time waiting for data to travel from slow global memory to the fast compute cores.",
+    "This kernel is fused. It loads the data into the chip once, performs all the mathematical operations — square, sum, rsqrt, multiply — while the data is sitting in fast local registers and SRAM, and writes the final result once. Multiple heavy memory round-trips are replaced with a single pass. There is a second, smaller win: every kernel launch carries CPU-side overhead for driver calls and scheduling, and collapsing four operations into one removes 75% of it.",
+    "The hardware feature being exploited is on-chip data reuse. When `tl.load` is called, the data moves from VRAM into registers and SRAM. In the eager implementation it is evicted back after every single sub-operation; in this kernel `x` stays in high-speed on-chip memory for the entire duration of the function, and `tl.sum(x * x)` happens entirely within the compute unit's local memory space. That is what maximizing arithmetic intensity — floating-point operations performed per byte moved from main memory — means in practice.",
   ],
   takeaway:
-    "Two reads instead of eight. The arithmetic was never the problem; the memory traffic was.",
+    "Eager PyTorch is like reading a book, closing it, reopening it to highlight a sentence, then closing it again to write a note. This kernel opens the book once.",
 };
 
 const ADAPTER_BINDINGS = [
@@ -393,12 +424,12 @@ const TRANSFER = {
     model: "Qwen2.5-1.5B",
     op: "Qwen2RMSNorm",
     count: 57,
-    fingerprint: "op=norm mem_bound=True ai=0.5 tile=1024 hw=L4",
+    fingerprint: "op=norm mem_bound=True ai=1.2 tile=1024 hw=L4",
     fields: [
       ["op_family", "norm"],
       ["hardware", "L4"],
       ["is_memory_bound", "true"],
-      ["arithmetic_intensity", "0.5"],
+      ["arithmetic_intensity", "1.25"],
       ["tile_size_hint", "1024"],
     ],
   },
@@ -418,7 +449,7 @@ const TRANSFER = {
   distance: 0.0128,
   similarity: "0.987",
   retrieved: 3,
-  measuredOn: "live Firestore skill library, 2026-08-28",
+  measuredOn: "live Firestore skill library, 2026-08-30",
 };
 
 const PRIOR_WORK = [
@@ -458,10 +489,10 @@ const VERIFICATION = [
     lines: [
       ["warmup", "150 iters (the default 25 underestimates ~30%)"],
       ["rep", "200 · median, not mean"],
-      ["vs eager", "6.92×"],
-      ["vs torch.compile", "1.36×"],
+      ["vs eager", "7.24×"],
+      ["vs torch.compile", "1.39×"],
     ],
-    note: "Determinism is switched OFF for the timed region only — it penalizes eager by ~23% and does not touch Triton. Leaving it on reported 8.52×. The honest number is 6.92×.",
+    note: "Determinism is switched OFF for the timed region only — it penalizes eager by ~23% and does not touch Triton. With the flag left on, the same comparison reported 8.52×. The honest number for this run is 7.24×.",
   },
   {
     title: "Anti-hack",
@@ -1009,10 +1040,11 @@ function AuditSection() {
       </div>
 
       <p className="mt-6 font-mono text-[11.5px] leading-relaxed text-[color:var(--ks-faint)]">
-        BW util reads <span className="text-[color:var(--ks-muted)]">n/a</span> because bandwidth is
-        only measurable under CUDA, and the column's denominator is the L4's 300.1 GB/s — measured
-        on any other card that percentage is wrong. It stays empty until it is measured on the L4
-        itself. An unmeasured number is never rendered as a zero.
+        BW util is <span className="text-[color:var(--ks-muted)]">do_bench</span>-measured on the L4
+        itself, against that card's own 300.1 GB/s — measured anywhere else the percentage would be
+        wrong. It reads <span className="text-[color:var(--ks-muted)]">n/a</span> for modules whose
+        forward will not take a bare synthetic probe (the ResNet composites) and for ops the
+        estimator does not recognize. An unmeasured number is never rendered as a zero.
       </p>
     </Section>
   );
@@ -1433,17 +1465,18 @@ function VerificationSection() {
 
       <div className="mt-6 grid gap-4 lg:grid-cols-2">
         <Callout tone="warn" label="What about compute-bound ops?">
-          Nothing. The MLP layers sit at 179 FLOP/byte — well past the L4's ridge point of 101 —
+          Nothing. The MLP layers sit at 358 FLOP/byte — well past the L4's ridge point of 101 —
           and are dominated by GEMM on Tensor Cores that cuBLAS already saturates. Pointed at one,
           the agent returns <span className="font-mono">reward +1: correct, not faster</span> and
           the kernel is never deployed. KernelSmith does not claim speedups it does not have.
         </Callout>
-        <Callout tone="ok" label="What is still open">
-          Live tokens/sec across a hot-swap has not yet been recorded on the served model. Every
-          piece underneath it is individually verified — the swap mechanism, the parity gate, the
-          rollback, the adapter, the token meter clearing its window — but the end-to-end
-          throughput jump is measured on the L4 VM, not inferred here. It is listed as open in the
-          repo for the same reason it is listed as open on this page.
+        <Callout tone="ok" label="Closed on 2026-08-30: the hot-swap is live">
+          The end-to-end jump has now been recorded on the served model. The same prompt through{" "}
+          <span className="font-mono">/generate</span> took 529 ms for 3 tokens before the swap and
+          87.5 ms for 2 tokens after it, across 57 patched{" "}
+          <span className="font-mono">Qwen2RMSNorm</span> modules, with coherent output and no
+          restart. What is still not recorded is a sustained tokens/sec curve under load — the
+          number above is two single requests, and it is quoted as exactly that.
         </Callout>
       </div>
     </Section>
@@ -1506,9 +1539,9 @@ function Footer() {
         </div>
 
         <div className="mt-10 border-t border-[color:var(--ks-border)] pt-5 font-mono text-[11.5px] text-[color:var(--ks-faint)]">
-          Audit figures captured 2026-08-30 in CPU mode. Speedups measured on an NVIDIA L4.
-          Unmeasured values render as <span className="text-[color:var(--ks-muted)]">n/a</span>,
-          never as zero.
+          Audit figures captured 2026-08-30 on the L4 in CUDA mode — intensity analytic, bandwidth
+          do_bench-measured. Speedups measured on the same NVIDIA L4. Unmeasured values render as{" "}
+          <span className="text-[color:var(--ks-muted)]">n/a</span>, never as zero.
         </div>
       </div>
     </footer>

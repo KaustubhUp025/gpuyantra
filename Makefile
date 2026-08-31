@@ -1,6 +1,6 @@
 .PHONY: setup demo audit audit-all test test-unit test-int lint format seed-skill \
         create-index serve-inference serve-ui serve-demo demo-with-dashboard \
-        harden unharden check-harden export-firestore
+        deploy-dashboard harden unharden check-harden export-firestore
 
 # --- One-command setup (README "Quick start") -------------------------------
 # `uv sync --frozen` refuses to re-resolve: a fresh L4 gets the exact transitive
@@ -105,6 +105,34 @@ demo-with-dashboard:
 	$(MAKE) demo
 	@echo "Demo complete. Dashboard at http://localhost:8502"
 	@echo "Trace saved to data/traces/"
+
+# --- Hosted replay on Cloud Run (Task 12b) ----------------------------------
+# The dashboard, in Replay mode, on a public URL: judges press Play and watch a
+# recorded L4 run rebuild itself. No GPU in the container, so `default_mode()`
+# probes the inference port, finds nothing, and opens in Replay by itself.
+#
+# `gcloud run deploy --source` would use a root Dockerfile (there is none) and
+# fall through to buildpacks, so the image is built here from
+# Dockerfile.dashboard and deployed by digest.
+#
+# One-time, if the Artifact Registry repo does not exist yet:
+#   gcloud artifacts repositories create kernelsmith --repository-format=docker \
+#     --location=us-central1 --project=gpuyantra
+#   gcloud auth configure-docker us-central1-docker.pkg.dev
+#
+# Whatever is in data/traces/ at build time is what the hosted demo can play.
+DASHBOARD_IMAGE ?= us-central1-docker.pkg.dev/gpuyantra/kernelsmith/dashboard:latest
+
+deploy-dashboard:
+	docker build -f Dockerfile.dashboard -t $(DASHBOARD_IMAGE) .
+	docker push $(DASHBOARD_IMAGE)
+	gcloud run deploy kernelsmith-dashboard \
+	  --image=$(DASHBOARD_IMAGE) \
+	  --project=gpuyantra --region=us-central1 \
+	  --allow-unauthenticated --port=8080 \
+	  --min-instances=0 --max-instances=1 \
+	  --memory=1Gi --cpu=1 --timeout=3600 \
+	  --set-env-vars=GOOGLE_CLOUD_PROJECT=gpuyantra
 
 # --- Security (spec 12) -----------------------------------------------------
 # The verifier is the trust anchor: it is the only thing standing between a

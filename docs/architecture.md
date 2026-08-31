@@ -303,7 +303,12 @@ baselines under it manufactures a speedup out of a measurement artifact:
 | | vs eager | vs torch.compile |
 |---|---|---|
 | Deterministic flag ON (inflated) | 8.52× | — |
-| **Deterministic flag OFF (fair, reported)** | **6.92×** | **1.36×** |
+| Deterministic flag OFF (fair) — Task 8, same L4 | 6.92× | 1.36× |
+| **Deterministic flag OFF — latest L4 run, 2026-08-30** | **7.24×** | **1.39×** |
+
+The two fair rows are two runs of the same code on the same card, five days apart, and
+the second is the one every other document quotes. The first is kept because it is what
+the flag comparison was measured against.
 
 `measure_baselines()` turns the flag off around the timed region and restores it —
 `warn_only` included — even if benchmarking raises. It stays ON everywhere else:
@@ -359,7 +364,7 @@ re-ran them. Both collapses were seeding and baseline artifacts.
 
 | Layer | Command | Scope |
 |---|---|---|
-| Unit | `make test-unit` | Hermetic. No GPU, no network. 317 tests. |
+| Unit | `make test-unit` | Hermetic. No GPU, no network. 641 tests. |
 | Integration | `make test-int` | Live gemini-3.7-flash + Firestore + GPU, `max_iterations=2`. |
 | All | `make test` | Both. |
 

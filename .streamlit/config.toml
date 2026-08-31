@@ -1,0 +1,34 @@
+# Streamlit configuration for the demo dashboard (Task 12b; palette in Task 13).
+#
+# Both dashboards read this file, so it must be safe for the operator's app on :8501
+# too — nothing here changes behaviour, only presentation and the two toggles Cloud
+# Run needs to serve the app from behind its own proxy.
+
+[server]
+# Cloud Run terminates TLS and proxies to the container; Streamlit's XSRF cookie check
+# rejects the forwarded WebSocket upgrade, and the page loads but never connects.
+# Off here rather than only in the container because a config split between two files
+# is a thing that gets out of sync silently. Nothing in either dashboard accepts
+# untrusted input: Live mode drives a local runner, Replay reads a file on disk.
+enableCORS = false
+enableXsrfProtection = false
+headless = true
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+# A stated palette, not Streamlit's default dark, so the recording looks deliberate and
+# the agent-map colours (blue root, amber active, slate idle) sit against a background
+# chosen to go with them. `--theme.base dark` on the command line still overrides.
+base = "dark"
+primaryColor = "#f59e0b"           # the amber that marks the working agent
+backgroundColor = "#0e1117"
+secondaryBackgroundColor = "#171b26"  # cards, sidebar, code blocks
+textColor = "#e8eaed"              # ~14:1 on the background
+font = "sans serif"
+
+[client]
+# A traceback belongs in the log, not on top of the demo. `showErrorDetails = false`
+# would hide it entirely, which is worse when something breaks mid-rehearsal.
+toolbarMode = "minimal"
