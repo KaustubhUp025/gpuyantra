@@ -20,6 +20,7 @@ screen during a rehearsal:
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -918,6 +919,31 @@ def test_real_traces_sort_ahead_of_the_hand_written_fixture(tmp_path: Path):
     (tmp_path / "sample_run.jsonl").write_text("", encoding="utf-8")
     (tmp_path / "demo-20260830-101414-58bee2.jsonl").write_text("", encoding="utf-8")
     assert [path.name for path in ordered_traces(tmp_path)][-1] == "sample_run.jsonl"
+
+
+def test_the_newest_capture_opens_first_whatever_the_mtimes_say(tmp_path: Path):
+    """The picker defaults to `index=0`, so this decides what a judge sees first.
+
+    mtime cannot decide it. `COPY data/traces/` in Dockerfile.dashboard restamps every
+    file with the image build time, so in the deployed container the mtime order is
+    whichever file the copy touched last. Here the mtimes are set INVERTED — the oldest
+    capture is made the newest file — and the newest capture must still lead.
+    """
+    names = [
+        "demo-20260830-101414-58bee2.jsonl",  # oldest capture, hot-swap refused
+        "demo-20260831-081623-053404.jsonl",  # layernorm, swap correctly refused
+        "demo-20260831-094045-1ba240.jsonl",  # newest capture, rmsnorm +3, 57 modules
+        "sample_run.jsonl",
+    ]
+    for index, name in enumerate(names):
+        path = tmp_path / name
+        path.write_text("", encoding="utf-8")
+        # Inverted on purpose: the first name listed gets the LATEST mtime.
+        os.utime(path, (1_700_000_000 - index, 1_700_000_000 - index))
+
+    ordered = [path.name for path in ordered_traces(tmp_path)]
+    assert ordered[0] == "demo-20260831-094045-1ba240.jsonl"
+    assert ordered[-1] == "sample_run.jsonl"
 
 
 def test_a_traces_caption_says_whether_its_hot_swap_went_live():

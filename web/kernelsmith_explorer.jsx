@@ -55,8 +55,8 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 const HEADLINE = {
   speedup: "7.24×",
   speedupNote: "vs eager PyTorch · NVIDIA L4 · 1.39× vs torch.compile",
-  tests: "659",
-  testsNote: "641 unit (hermetic) + 18 integration on the L4",
+  tests: "716",
+  testsNote: "698 unit (hermetic) + 18 integration on the L4",
   models: "3",
   modelsNote: "decoder, classic decoder, vision — one analysis",
 };

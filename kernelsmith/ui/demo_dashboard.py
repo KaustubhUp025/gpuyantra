@@ -1622,14 +1622,30 @@ def script_flags() -> set[str]:
 def ordered_traces(trace_dir: str | Path = DEFAULT_TRACE_DIR) -> list[Path]:
     """Traces for the picker: real captured runs newest-first, the fixture last.
 
-    `list_traces` sorts by mtime, which on a fresh clone is checkout time — every file
-    within a second of every other, so the "most recent trace" would be whichever one
-    git happened to write last. Pinning the hand-written fixture to the end makes the
-    default selection deterministic in a container: a real run if there is one, the
+    Ordered by the timestamp in the FILENAME, not by mtime, and that is the whole point
+    of this function rather than a refinement of it.
+
+    `list_traces` sorts by mtime. On a fresh clone that is checkout time — every file
+    within the same second — and inside `Dockerfile.dashboard` it is image build time,
+    because `COPY data/traces/` restamps all of them. So in the deployed container the
+    "most recent trace" is whichever one the copy happened to touch last, and the trace a
+    judge sees first is decided by luck. Observed on the dev box after a pull: five traces
+    sharing mtime 14:58:47, ordered among themselves by nothing at all.
+
+    `start_run` names every trace `demo-{%Y%m%d-%H%M%S}-{hex}`, so a reverse lexicographic
+    sort on the name IS capture order, it survives any copy, and it keeps the property the
+    mtime sort was reaching for — the run that just finished is still first during a
+    recording session. Anything not matching that shape still sorts deterministically.
+
+    The hand-written fixture stays pinned last regardless: a real run if there is one, the
     fixture only if there is not.
     """
     traces = list_traces(trace_dir)
-    real = [path for path in traces if path.name != SAMPLE_TRACE_NAME]
+    real = sorted(
+        (path for path in traces if path.name != SAMPLE_TRACE_NAME),
+        key=lambda path: path.name,
+        reverse=True,
+    )
     fixture = [path for path in traces if path.name == SAMPLE_TRACE_NAME]
     return real + fixture
 

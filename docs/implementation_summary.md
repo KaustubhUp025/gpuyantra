@@ -789,13 +789,14 @@ Reading of the discrepancies, for the script:
   `record_chat` writes only to `st.session_state` — no ADK event exists, so nothing reaches
   the JSONL. **The pair exists only on screen, in Live mode, on the L4.** Film it; a replay
   will never show it.
-- ⚠️ **Test count: the explorer's `HEADLINE.tests = "659"` is stale and understates the
-  suite.** Measured 2026-08-31: `make test-unit` collects and passes **697** (the 607
-  `def test_` functions across 27 files, expanded by parametrization). With the 18
-  integration tests that is **715 total**, against the explorer's claimed 659 (641 + 18).
-  The explorer was left unchanged — it is a measured claim and changing it is the owner's
-  call — but it should say 697/715 before recording, and the integration count wants a
-  re-run on the L4 to confirm it is still 18.
+- **Test count, re-measured 2026-08-31 and now correct on the page:** pytest collects
+  **716** in total — **698 unit** (the `def test_` functions across 27 files, expanded by
+  parametrization, including the trace-ordering regression test added the same day) and
+  **18 integration**, confirmed by `pytest -k integration --collect-only` reporting
+  `18/716 tests collected`. The explorer's headline was 659 (641 + 18) and now reads 716
+  with the note "698 unit (hermetic) + 18 integration on the L4". Quote **716 total /
+  698 unit** — and re-count if any test is added before recording, because this number is
+  a claim on a judge-facing page.
 
 ---
 
@@ -1110,12 +1111,16 @@ by hand; there is no check that they agree.**
    successful-swap traces report `0.0` tokens/s, and no trace ever can do better: chat
    exchanges never become ADK events, so `EventLogger` never sees them. On the L4, in Live
    mode: ask a preset question, run the optimization, ask again — and record the screen.
-3. **Pick the trace the hosted dashboard opens on.** `make deploy-dashboard` bakes in
-   whatever is in `data/traces/` and `ordered_traces()` puts real captures first, so the
-   default playback is whichever it ranks top — and the set includes a layernorm run whose
-   swap was correctly refused (Qwen2 has no LayerNorm module to match). `094045` is the
-   better opener: rmsnorm, +3, 57 modules patched, swap successful.
-4. **Test count is understated on a judge-facing surface.** `make test-unit` now collects
-   **697**, not the explorer's 641; the headline should read 697 unit / 715 total (§10).
-   Deliberately not changed here — it is a measured claim, and the 18 integration tests
-   want a re-run on the L4 first.
+3. ~~Pick the trace the hosted dashboard opens on.~~ **Fixed 2026-08-31.**
+   `ordered_traces()` sorted by mtime, which `COPY data/traces/` restamps at image build
+   time — so in the container the first trace was decided by whichever file the copy
+   touched last, out of five sharing one checkout mtime. It now sorts on the timestamp in
+   the filename, which is capture order and survives any copy. The default is
+   `demo-20260831-094045`, captioned "23 steps · 114s · 7.22× faster than PyTorch · went
+   live on 57 layers". Pinned by
+   `test_the_newest_capture_opens_first_whatever_the_mtimes_say`, which inverts the mtimes
+   so a regression to mtime ordering fails there rather than in the deployed container.
+4. ~~Test count is understated on a judge-facing surface.~~ **Fixed 2026-08-31** — the
+   explorer reads 716 total / 698 unit + 18 integration (§10). **Re-deploy the explorer for
+   this to be live.** The 18 integration tests are a collection count taken here; a full
+   `make test-int` run on the L4 would confirm they still all pass.
