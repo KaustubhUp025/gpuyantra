@@ -20,6 +20,28 @@ See [`docs/architecture.md`](docs/architecture.md) for the full design, and the
 
 ---
 
+## Architecture
+
+![gpuyantra architecture](Architecture.drawio.png)
+
+Editable source: [`Architecture.drawio`](Architecture.drawio) — open at
+[app.diagrams.net](https://app.diagrams.net/). Every number on it is a measured value
+from the 2026-08-30 L4 run in [Measured results](#measured-results--nvidia-l4-2026-08-30),
+not an illustration.
+
+Reading it in one pass: the **Supervisor** runs a 7-step resumable protocol over
+`session.state` and needs **two turns** — an ADK `LoopAgent` cannot transfer back, so turn 1
+ends at escalation and turn 2 does the upsert and the hot-swap. The **Profiler** places the
+op on the roofline and emits a fingerprint that carries no model name and no op name, which
+is what lets a GPT-2 LayerNorm retrieve a Qwen2.5 RMSNorm skill. Inside the
+**RefinementLoop** the Coder writes the kernel *and its deployment contract*, and the Judge
+calls `verify_kernel` — the Judge never sees or edits that contract. The
+**EscalationChecker** is a `BaseAgent` with no model, and is the one place the bandit is
+credited, once per run. The **verifier** is the trust anchor: four layers, and a failure at
+any one scores −1 and skips the rest, so nothing unverified reaches the served model.
+
+---
+
 ## Live demo
 
 | | |

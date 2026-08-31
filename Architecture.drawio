@@ -1,0 +1,222 @@
+<mxfile host="app.diagrams.net">
+  <diagram name="Page-1" id="xHbZsvZnKUs_L_LCJUX8">
+    <mxGraphModel dx="1344" dy="884" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" parent="1" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;fontSize=14;" value="&lt;font style=&quot;font-size:24px;&quot;&gt;&lt;b&gt;gpuyantra&lt;/b&gt; — Architecture&lt;/font&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px;color:#888;&quot;&gt;Autonomous GPU Kernel Optimization on Google Cloud · Compute Engine g2-standard-4 · NVIDIA L4 24 GB&lt;/font&gt;" vertex="1">
+          <mxGeometry height="52" width="680" x="160" y="8" as="geometry" />
+        </mxCell>
+        <mxCell id="sup" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#BBDEFB;strokeColor=#1565C0;fontColor=#0D47A1;fontSize=11;shadow=1;arcSize=18;strokeWidth=2;" value="&lt;b&gt;Supervisor&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px;color:#666;&quot;&gt;LlmAgent · gemini-3.7-flash&lt;br&gt;7-step resumable protocol&lt;br&gt;Tools: retrieve · upsert · hotswap · explain&lt;/font&gt;" vertex="1">
+          <mxGeometry height="80" width="220" x="53" y="71" as="geometry" />
+        </mxCell>
+        <mxCell id="prof" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#BBDEFB;strokeColor=#1565C0;fontColor=#0D47A1;fontSize=11;shadow=1;arcSize=18;" value="&lt;b&gt;Profiler&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px;color:#666;&quot;&gt;LlmAgent · Roofline analysis&lt;br&gt;Tool: profile_op_by_name&lt;br&gt;→ bottleneck fingerprint&lt;/font&gt;" vertex="1">
+          <mxGeometry height="65" width="160" x="50" y="200" as="geometry" />
+        </mxCell>
+        <mxCell id="loop_bg" parent="1" style="swimlane;startSize=22;fillColor=#E8EAF6;strokeColor=#5C6BC0;fontColor=#283593;rounded=1;arcSize=10;html=1;fontSize=10;fontStyle=1;swimlaneLine=0;" value="&lt;b&gt;RefinementLoop&lt;/b&gt; &amp;nbsp;LoopAgent · max 6 iterations" vertex="1">
+          <mxGeometry height="195" width="310" x="324" y="80" as="geometry" />
+        </mxCell>
+        <mxCell id="coder" parent="loop_bg" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C5CAE9;strokeColor=#283593;fontColor=#1A237E;fontSize=10;shadow=1;arcSize=18;" value="&lt;b&gt;Coder&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px;color:#666;&quot;&gt;LlmAgent · output_schema&lt;br&gt;Writes Triton kernel&lt;br&gt;+ adapter_mapping&lt;/font&gt;" vertex="1">
+          <mxGeometry height="68" width="130" x="15" y="32" as="geometry" />
+        </mxCell>
+        <mxCell id="judge" parent="loop_bg" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C5CAE9;strokeColor=#283593;fontColor=#1A237E;fontSize=10;shadow=1;arcSize=18;" value="&lt;b&gt;Judge&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px;color:#666;&quot;&gt;LlmAgent&lt;br&gt;tools=[verify_kernel]&lt;br&gt;Emits Verdict&lt;/font&gt;" vertex="1">
+          <mxGeometry height="68" width="130" x="154" y="32" as="geometry" />
+        </mxCell>
+        <mxCell id="esc" parent="loop_bg" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFCDD2;strokeColor=#C62828;fontColor=#B71C1C;fontSize=10;shadow=1;arcSize=18;" value="&lt;b&gt;EscalationChecker&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px;color:#666;&quot;&gt;BaseAgent · no LLM&lt;br&gt;reward ≥ 3 → escalate · Credits bandit&lt;/font&gt;" vertex="1">
+          <mxGeometry height="60" width="170" x="75" y="120" as="geometry" />
+        </mxCell>
+        <mxCell id="e_c_j" edge="1" parent="loop_bg" source="coder" style="edgeStyle=orthogonalEdgeStyle;rounded=0;strokeColor=#283593;strokeWidth=2;html=1;endArrow=blockThin;endFill=1;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;" target="judge">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_j_e" edge="1" parent="loop_bg" source="judge" style="edgeStyle=orthogonalEdgeStyle;rounded=0;strokeColor=#283593;strokeWidth=2;html=1;endArrow=blockThin;endFill=1;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;" target="esc">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="219" y="110" />
+              <mxPoint x="160" y="110" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_e_c" edge="1" parent="loop_bg" source="esc" style="edgeStyle=orthogonalEdgeStyle;rounded=0;strokeColor=#C62828;strokeWidth=1;dashed=1;dashPattern=6 3;html=1;endArrow=blockThin;endFill=1;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;" target="coder" value="&lt;font style=&quot;font-size:8px;color:#C62828;&quot;&gt;retry&lt;/font&gt;">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="160" y="110" />
+              <mxPoint x="80" y="110" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="server_box" parent="1" style="swimlane;startSize=22;fillColor=#E8F5E9;strokeColor=#2E7D32;fontColor=#1B5E20;rounded=1;arcSize=10;html=1;fontSize=10;fontStyle=1;swimlaneLine=0;" value="&lt;b&gt;FastAPI Inference Server&lt;/b&gt; &amp;nbsp;:8000" vertex="1">
+          <mxGeometry height="195" width="310" x="677" y="84" as="geometry" />
+        </mxCell>
+        <mxCell id="model" parent="server_box" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C8E6C9;strokeColor=#2E7D32;fontColor=#1B5E20;fontSize=10;shadow=1;arcSize=16;" value="&lt;b&gt;Qwen2.5-1.5B-Instruct&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px;color:#666;&quot;&gt;57× Qwen2RMSNorm · FP16&lt;br&gt;TF32 on · Never torch.compile&#39;d&lt;/font&gt;" vertex="1">
+          <mxGeometry height="60" width="175" x="15" y="25" as="geometry" />
+        </mxCell>
+        <mxCell id="gen" parent="server_box" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C8E6C9;strokeColor=#2E7D32;fontColor=#1B5E20;fontSize=10;shadow=1;arcSize=16;" value="&lt;b&gt;/generate&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px;color:#666;&quot;&gt;Prompt → tokens&lt;br&gt;tokens/s measurement&lt;/font&gt;" vertex="1">
+          <mxGeometry height="55" width="130" x="15" y="105" as="geometry" />
+        </mxCell>
+        <mxCell id="swap" parent="server_box" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#A5D6A7;strokeColor=#2E7D32;fontColor=#1B5E20;fontSize=10;shadow=1;arcSize=16;strokeWidth=2;" value="&lt;b&gt;/swap&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px;color:#666;&quot;&gt;types.MethodType patch&lt;br&gt;Parity gate · rollback&lt;/font&gt;" vertex="1">
+          <mxGeometry height="55" width="130" x="165" y="105" as="geometry" />
+        </mxCell>
+        <mxCell id="result" parent="server_box" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF9C4;strokeColor=#F9A825;fontColor=#E65100;fontSize=10;shadow=1;arcSize=20;strokeWidth=2;" value="&lt;font style=&quot;font-size:10px;&quot;&gt;&lt;b&gt;7.24×&lt;/b&gt; vs eager · &lt;b&gt;1.39×&lt;/b&gt; vs compile&lt;br&gt;&lt;b&gt;+3&lt;/b&gt; reward · &lt;b&gt;15/15&lt;/b&gt; correct&lt;/font&gt;" vertex="1">
+          <mxGeometry height="50" width="100" x="200" y="35" as="geometry" />
+        </mxCell>
+        <mxCell id="e_swap_model" edge="1" parent="server_box" source="swap" style="edgeStyle=orthogonalEdgeStyle;rounded=0;strokeColor=#2E7D32;strokeWidth=2;html=1;endArrow=blockThin;endFill=1;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;" target="model">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="230" y="95" />
+              <mxPoint x="103" y="95" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="fp" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E1BEE7;strokeColor=#7B1FA2;fontColor=#4A148C;fontSize=10;shadow=1;arcSize=18;" value="&lt;b&gt;Bottleneck Fingerprint&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px;color:#666;&quot;&gt;op=norm mem_bound=True ai=1.2&lt;br&gt;tile=1024 hw=L4&lt;br&gt;&lt;i&gt;No model name · no op name&lt;/i&gt;&lt;/font&gt;" vertex="1">
+          <mxGeometry height="68" width="200" x="83" y="310" as="geometry" />
+        </mxCell>
+        <mxCell id="bandit" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E1BEE7;strokeColor=#7B1FA2;fontColor=#4A148C;fontSize=10;shadow=1;arcSize=18;" value="&lt;b&gt;UCB1 Bandit&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px;color:#666;&quot;&gt;Explore vs exploit&lt;br&gt;over retrieved skills&lt;/font&gt;" vertex="1">
+          <mxGeometry height="52" width="130" x="318" y="318" as="geometry" />
+        </mxCell>
+        <mxCell id="verify_box" parent="1" style="swimlane;startSize=22;fillColor=#FFF3E0;strokeColor=#E65100;fontColor=#BF360C;rounded=1;arcSize=8;html=1;fontSize=10;fontStyle=1;swimlaneLine=0;" value="&lt;b&gt;Verifier — 4-Layer Trust Anchor&lt;/b&gt;" vertex="1">
+          <mxGeometry height="110" width="520" x="467" y="334" as="geometry" />
+        </mxCell>
+        <mxCell id="ast" parent="verify_box" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE0B2;strokeColor=#E65100;fontColor=#BF360C;fontSize=9;shadow=1;arcSize=14;" value="&lt;b&gt;① AST Checker&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px;color:#666;&quot;&gt;7 anti-hack rules&lt;br&gt;Static AST · never runs code&lt;/font&gt;" vertex="1">
+          <mxGeometry height="55" width="110" x="10" y="30" as="geometry" />
+        </mxCell>
+        <mxCell id="contract" parent="verify_box" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE0B2;strokeColor=#E65100;fontColor=#BF360C;fontSize=9;shadow=1;arcSize=14;" value="&lt;b&gt;② Contract&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px;color:#666;&quot;&gt;adapter_mapping&lt;br&gt;meta-device hasattr&lt;/font&gt;" vertex="1">
+          <mxGeometry height="55" width="110" x="135" y="30" as="geometry" />
+        </mxCell>
+        <mxCell id="sandbox" parent="verify_box" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE0B2;strokeColor=#E65100;fontColor=#BF360C;fontSize=9;shadow=1;arcSize=14;" value="&lt;b&gt;③ Sandbox&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px;color:#666;&quot;&gt;subprocess · SIGKILL · scrubbed env&lt;br&gt;5×3 shapes · 1% tol · 60 s&lt;/font&gt;" vertex="1">
+          <mxGeometry height="55" width="115" x="260" y="30" as="geometry" />
+        </mxCell>
+        <mxCell id="reward" parent="verify_box" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFCC80;strokeColor=#E65100;fontColor=#BF360C;fontSize=9;shadow=1;arcSize=14;strokeWidth=2;" value="&lt;b&gt;④ Reward&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px;color:#666;&quot;&gt;In-process recompute&lt;br&gt;−1 / +1 / +2 / +3&lt;/font&gt;" vertex="1">
+          <mxGeometry height="55" width="115" x="390" y="30" as="geometry" />
+        </mxCell>
+        <mxCell id="ea1" edge="1" parent="verify_box" source="ast" style="rounded=0;strokeColor=#E65100;strokeWidth=2;html=1;endArrow=blockThin;endFill=1;edgeStyle=orthogonalEdgeStyle;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;" target="contract">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ea2" edge="1" parent="verify_box" source="contract" style="rounded=0;strokeColor=#E65100;strokeWidth=2;html=1;endArrow=blockThin;endFill=1;edgeStyle=orthogonalEdgeStyle;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;" target="sandbox">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ea3" edge="1" parent="verify_box" source="sandbox" style="rounded=0;strokeColor=#E65100;strokeWidth=2;html=1;endArrow=blockThin;endFill=1;edgeStyle=orthogonalEdgeStyle;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;" target="reward">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="fail_label" parent="verify_box" style="text;html=1;align=center;" value="&lt;font style=&quot;font-size:8px;color:#C62828;&quot;&gt;Any layer fails → reward −1, skip remaining · all four sources chmod 444 (make harden)&lt;/font&gt;" vertex="1">
+          <mxGeometry height="18" width="250" x="120" y="88" as="geometry" />
+        </mxCell>
+        <mxCell id="gcp_box" parent="1" style="swimlane;startSize=22;fillColor=#E0F2F1;strokeColor=#00897B;fontColor=#004D40;rounded=1;arcSize=8;html=1;fontSize=10;fontStyle=1;swimlaneLine=0;" value="&lt;b&gt;Google Cloud Managed Services&lt;/b&gt;" vertex="1">
+          <mxGeometry height="100" width="930" x="50" y="460" as="geometry" />
+        </mxCell>
+        <mxCell id="fs" parent="gcp_box" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#B2DFDB;strokeColor=#00897B;fontColor=#004D40;fontSize=9;shadow=1;size=10;" value="&lt;b&gt;Firestore&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px;color:#666;&quot;&gt;Vector(768) COSINE&lt;br&gt;Skills · Runs · Traces&lt;br&gt;Composite pre-filter&lt;/font&gt;" vertex="1">
+          <mxGeometry height="65" width="140" x="20" y="28" as="geometry" />
+        </mxCell>
+        <mxCell id="vtx" parent="gcp_box" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#B2DFDB;strokeColor=#00897B;fontColor=#004D40;fontSize=9;shadow=1;arcSize=14;" value="&lt;b&gt;Vertex AI&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px;color:#666;&quot;&gt;gemini-3.7-flash · gemini-embedding-001 (768d)&lt;br&gt;gemma-4-26b-a4b-it-maas&lt;/font&gt;" vertex="1">
+          <mxGeometry height="55" width="180" x="200" y="30" as="geometry" />
+        </mxCell>
+        <mxCell id="cr1" parent="gcp_box" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#B2DFDB;strokeColor=#00897B;fontColor=#004D40;fontSize=9;shadow=1;arcSize=14;" value="&lt;b&gt;Cloud Run&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px;color:#666;&quot;&gt;gpuyantra-dashboard&lt;br&gt;Streamlit · Scale to 0&lt;/font&gt;" vertex="1">
+          <mxGeometry height="55" width="145" x="420" y="30" as="geometry" />
+        </mxCell>
+        <mxCell id="cr2" parent="gcp_box" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#B2DFDB;strokeColor=#00897B;fontColor=#004D40;fontSize=9;shadow=1;arcSize=14;" value="&lt;b&gt;Cloud Run&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px;color:#666;&quot;&gt;gpuyantra-explorer&lt;br&gt;React SPA · 3-model audit&lt;/font&gt;" vertex="1">
+          <mxGeometry height="55" width="145" x="600" y="30" as="geometry" />
+        </mxCell>
+        <mxCell id="tests" parent="gcp_box" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#B2DFDB;strokeColor=#00897B;fontColor=#004D40;fontSize=9;shadow=1;arcSize=14;" value="&lt;b&gt;716 Tests&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px;color:#666;&quot;&gt;698 unit + 18 integration&lt;br&gt;Reproduces &amp;lt; $1&lt;/font&gt;" vertex="1">
+          <mxGeometry height="55" width="130" x="780" y="30" as="geometry" />
+        </mxCell>
+        <mxCell id="e_sup_prof" edge="1" parent="1" source="sup" style="edgeStyle=orthogonalEdgeStyle;rounded=0;strokeColor=#1565C0;strokeWidth=2;html=1;endArrow=blockThin;endFill=1;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;" target="prof" value="&lt;font style=&quot;font-size:8px;&quot;&gt;Turn 1&lt;/font&gt;">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="163" y="176" />
+              <mxPoint x="130" y="176" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_sup_loop" edge="1" parent="1" source="sup" style="edgeStyle=orthogonalEdgeStyle;rounded=0;strokeColor=#1565C0;strokeWidth=2;html=1;endArrow=blockThin;endFill=1;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;" target="loop_bg" value="&lt;font style=&quot;font-size:8px;&quot;&gt;Turn 1&lt;/font&gt;">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="163" y="178" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_esc_sup" edge="1" parent="1" source="esc" style="edgeStyle=orthogonalEdgeStyle;rounded=0;strokeColor=#C62828;strokeWidth=2;dashed=1;dashPattern=8 4;html=1;endArrow=blockThin;endFill=1;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;" target="sup" value="&lt;font style=&quot;font-size:8px;color:#C62828;&quot;&gt;escalate&lt;/font&gt;">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="306" y="230" />
+              <mxPoint x="306" y="111" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_sup_swap" edge="1" parent="1" source="sup" style="edgeStyle=orthogonalEdgeStyle;rounded=0;strokeColor=#2E7D32;strokeWidth=2;html=1;endArrow=blockThin;endFill=1;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;" target="swap" value="&lt;font style=&quot;font-size:8px;color:#2E7D32;&quot;&gt;Turn 2: hot-swap&lt;/font&gt;">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="292" y="111" />
+              <mxPoint x="292" y="291" />
+              <mxPoint x="907" y="291" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_prof_fp" edge="1" parent="1" source="prof" style="edgeStyle=orthogonalEdgeStyle;rounded=0;strokeColor=#7B1FA2;strokeWidth=2;html=1;endArrow=blockThin;endFill=1;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;" target="fp">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="130" y="288" />
+              <mxPoint x="183" y="288" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_fp_bandit" edge="1" parent="1" source="fp" style="rounded=0;strokeColor=#7B1FA2;strokeWidth=2;html=1;endArrow=blockThin;endFill=1;edgeStyle=orthogonalEdgeStyle;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;" target="bandit">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_fp_fs" edge="1" parent="1" source="fp" style="edgeStyle=orthogonalEdgeStyle;rounded=0;strokeColor=#7B1FA2;strokeWidth=1;dashed=1;dashPattern=6 3;html=1;endArrow=blockThin;endFill=1;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;" target="fs" value="&lt;font style=&quot;font-size:8px;color:#7B1FA2;&quot;&gt;embed → vector search&lt;/font&gt;">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="183" y="433" />
+              <mxPoint x="140" y="433" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_judge_ast" edge="1" parent="1" source="judge" style="edgeStyle=orthogonalEdgeStyle;rounded=0;strokeColor=#E65100;strokeWidth=2;html=1;endArrow=blockThin;endFill=1;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;" target="ast" value="&lt;font style=&quot;font-size:8px;color:#E65100;&quot;&gt;verify_kernel&lt;/font&gt;">
+          <mxGeometry relative="1" x="0.0827" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="650" y="146" />
+              <mxPoint x="650" y="320" />
+              <mxPoint x="532" y="320" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_sup_fs" edge="1" parent="1" source="sup" style="edgeStyle=orthogonalEdgeStyle;rounded=0;strokeColor=#00897B;strokeWidth=1;dashed=1;dashPattern=5 3;html=1;endArrow=blockThin;endFill=1;libavoidRouting=1;orthogonalLoop=1;jettySize=auto;" target="fs" value="&lt;font style=&quot;font-size:8px;color:#00897B;&quot;&gt;upsert skill&lt;/font&gt;">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="34" y="111" />
+              <mxPoint x="34" y="521" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="legend" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FAFAFA;strokeColor=#E0E0E0;arcSize=6;" value="" vertex="1">
+          <mxGeometry height="30" width="930" x="50" y="575" as="geometry" />
+        </mxCell>
+        <mxCell id="l1" parent="1" style="text;html=1;align=center;fillColor=#E3F2FD;strokeColor=#1565C0;rounded=1;" value="&lt;font style=&quot;font-size:9px;&quot;&gt;🔵 Agent Tree&lt;/font&gt;" vertex="1">
+          <mxGeometry height="22" width="88" x="65" y="578" as="geometry" />
+        </mxCell>
+        <mxCell id="l2" parent="1" style="text;html=1;align=center;fillColor=#FFF3E0;strokeColor=#E65100;rounded=1;" value="&lt;font style=&quot;font-size:9px;&quot;&gt;🟠 Verifier&lt;/font&gt;" vertex="1">
+          <mxGeometry height="22" width="75" x="170" y="578" as="geometry" />
+        </mxCell>
+        <mxCell id="l3" parent="1" style="text;html=1;align=center;fillColor=#E8F5E9;strokeColor=#2E7D32;rounded=1;" value="&lt;font style=&quot;font-size:9px;&quot;&gt;🟢 Server&lt;/font&gt;" vertex="1">
+          <mxGeometry height="22" width="70" x="262" y="578" as="geometry" />
+        </mxCell>
+        <mxCell id="l4" parent="1" style="text;html=1;align=center;fillColor=#F3E5F5;strokeColor=#7B1FA2;rounded=1;" value="&lt;font style=&quot;font-size:9px;&quot;&gt;🟣 Data Flow&lt;/font&gt;" vertex="1">
+          <mxGeometry height="22" width="82" x="349" y="578" as="geometry" />
+        </mxCell>
+        <mxCell id="l5" parent="1" style="text;html=1;align=center;fillColor=#E0F2F1;strokeColor=#00897B;rounded=1;" value="&lt;font style=&quot;font-size:9px;&quot;&gt;🟤 GCP&lt;/font&gt;" vertex="1">
+          <mxGeometry height="22" width="55" x="448" y="578" as="geometry" />
+        </mxCell>
+        <mxCell id="l6" parent="1" style="text;html=1;align=center;fillColor=#FFCDD2;strokeColor=#C62828;rounded=1;" value="&lt;font style=&quot;font-size:9px;&quot;&gt;🔴 Exit&lt;/font&gt;" vertex="1">
+          <mxGeometry height="22" width="52" x="520" y="578" as="geometry" />
+        </mxCell>
+        <mxCell id="l7" parent="1" style="text;html=1;align=center;rounded=1;fillColor=#FAFAFA;strokeColor=#BDBDBD;" value="&lt;font style=&quot;font-size:9px;&quot;&gt;━━ Direct &amp;nbsp; ┅┅ Network/async&lt;/font&gt;" vertex="1">
+          <mxGeometry height="22" width="185" x="590" y="578" as="geometry" />
+        </mxCell>
+        <mxCell id="l8" parent="1" style="text;html=1;align=center;fillColor=#FFF9C4;strokeColor=#F9A825;rounded=1;" value="&lt;font style=&quot;font-size:9px;&quot;&gt;🟡 Result&lt;/font&gt;" vertex="1">
+          <mxGeometry height="22" width="65" x="792" y="578" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
