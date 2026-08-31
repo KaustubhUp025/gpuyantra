@@ -1348,3 +1348,66 @@ so the two can never draw the same agent differently.
 Vertex/Firestore/GPU), `make lint` clean, a local launch logs no deprecation warnings, and
 the container builds (567 MB) and plays both committed traces end to end with one metrics
 row, the chart, and no exceptions.*
+
+---
+
+## Task 13b — gpuyantra is the project, KernelSmith is the agent tree
+
+A naming rule, applied only to judge-facing surfaces:
+
+| Says gpuyantra | Says KernelSmith |
+|---|---|
+| dashboard page title, header, sidebar mark | agent-map nodes (Supervisor, Profiler, Coder, Judge, …) |
+| explorer `<title>`, nav mark, hero `<h1>`, footer | the chart's kernel bar, and every sentence about who profiles, writes, verifies or deploys |
+| README and architecture-doc titles | the `kernelsmith` package, its modules, the Firestore collections, the Makefile targets |
+| Cloud Run services (`gpuyantra-dashboard`, `gpuyantra-explorer`) | |
+
+Nothing in the code was renamed — not a module, class, function, import, test, Makefile
+target, collection or agent name. The package implements the agent tree, so `kernelsmith`
+is what it should be called; the project name belongs on the surfaces a judge reads. Both
+files that carry a brand mark now state that rule in their own header, because the obvious
+next edit is someone "fixing the inconsistency" in one direction or the other.
+
+The Cloud Run *service* names did change, since the service name is what appears in the
+URL. The Artifact Registry repo moves with them: `us-central1-docker.pkg.dev/gpuyantra/gpuyantra/{dashboard,explorer}`.
+Nothing was deployed yet, so there is no stale service to clean up.
+
+---
+
+## The explorer is served as two files and compiled in the browser (Task 13b)
+
+`web/kernelsmith_explorer.jsx` had no way to be served: it is a bare ES module with a
+React import, no build tooling, and 73 KB of measured numbers in it. It is now hosted by
+`web/index.html` + `web/Dockerfile` (nginx), with **no build step**: React 18, ReactDOM
+and Babel standalone come from a CDN at pinned versions, Tailwind's Play CDN generates the
+utility CSS the component is written in, and the page `fetch`es the JSX next to it,
+strips the two module lines a browser cannot resolve, compiles it, and renders it.
+
+**It fetches rather than inlines on purpose.** Pasting the JSX into the HTML would put a
+second copy of every measured number in the repo, and the copy that ships would be the one
+nobody edits. The cost is that `file://` cannot fetch, so opening the file straight off
+disk shows an explanation instead of the explorer; `web/Dockerfile` (and
+`python3 -m http.server`) serve it properly.
+
+**The strip regexes are line-bound, and that is not stylistic.** The first version used
+`/^\s*import\s+[^;]+;/gm`. `[^;]+` crosses newlines, and `KERNEL_SOURCE` is a template
+literal containing PYTHON that starts with `import torch` at column 0 — so it ate **53
+lines** from inside the winning kernel and the page died on a Babel parse error pointing at
+Python. The patterns now match the single React import by name and the single
+`export default function`, and `tests/test_explorer_packaging.py` reads the real regexes
+*out of index.html* and applies them to the real JSX, so a loosened pattern fails there
+rather than in a browser on demo day. It also pins the three assumptions the packaging
+makes: exactly one ESM import, exactly one default export at column 0, and the kernel
+source surviving byte for byte.
+
+Two things nginx needed: port 8080 for Cloud Run, and a MIME type for `.jsx` (there is
+none by default, and `application/octet-stream` is not what you want to hand to `fetch`).
+
+Verified beyond the plan's curl check: the compile-and-render path renders **66 KB of
+HTML** under `react-dom/server` in Node, and the container serves a page that **headless
+Chrome renders in full** — `<h1>gpuyantra</h1>`, 13.4 KB of Tailwind CSS generated at
+runtime, the component's own theme CSS present, the boot screen replaced, and zero console
+errors.
+
+*Source: Task 13b, 2026-08-31. Gates: 671 tests pass, `make lint` clean, both images build
+and serve.*

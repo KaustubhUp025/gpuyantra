@@ -1,5 +1,12 @@
 """The recording dashboard (Task 12) — a separate app from `streamlit_app.py`.
 
+NAMING (Task 13b). On screen this is **gpuyantra**, the project; **KernelSmith** is the
+agent tree inside it that does the work. So the page title, the header and the sidebar
+mark say gpuyantra, while anything naming who profiles, writes, verifies or deploys says
+KernelSmith — including the agent-map nodes and the chart's kernel bar, which are
+KernelSmith internals and correctly labelled as such. The Python package, its modules and
+the Firestore collections stay `kernelsmith`: code is not a judge-facing surface.
+
     streamlit run kernelsmith/ui/demo_dashboard.py --server.port 8502
 
 `streamlit_app.py` is the operator's dashboard: three columns, dense, every number on
@@ -1773,9 +1780,9 @@ def render_header(metrics: dict[str, Any], target: Any = None) -> None:
     title, cards = container.columns([1.35, 2])
     with title:
         st.markdown(
-            '<p class="ks-title">KernelSmith</p>'
-            '<p class="ks-sub">An AI agent that makes a running AI model faster, '
-            "and proves it</p>",
+            '<p class="ks-title">gpuyantra</p>'
+            '<p class="ks-sub">Making a running AI model faster, and proving it — '
+            "powered by the <strong>KernelSmith</strong> agent tree</p>",
             unsafe_allow_html=True,
         )
     with cards:
@@ -2285,8 +2292,8 @@ def render_live() -> None:
 # --------------------------------------------------------------------------- #
 
 HERO_PITCH = (
-    "A language model is running on a GPU. In the next minute, a team of AI agents finds "
-    "the slowest piece of it, writes faster code for that piece, tests the new code "
+    "A language model is running on a GPU. In the next minute, the KernelSmith agent tree "
+    "finds the slowest piece of it, writes faster code for that piece, tests the new code "
     "against the original, and loads it into the running server — without restarting it. "
     "Every number you see was measured on a real NVIDIA L4 GPU; this is a recording of "
     "that run."
@@ -2432,7 +2439,8 @@ def _blank_metrics() -> dict[str, Any]:
 
 def render_sidebar() -> dict[str, Any]:
     """Mode switch and its controls. Returns what the chosen mode needs."""
-    st.sidebar.markdown("### KernelSmith")
+    st.sidebar.markdown("### gpuyantra")
+    st.sidebar.caption("The KernelSmith agent tree, live or replayed.")
     mode = st.sidebar.radio(
         "Mode",
         MODES,
@@ -2489,7 +2497,7 @@ def render_sidebar() -> dict[str, Any]:
 
 def main() -> None:
     st.set_page_config(
-        page_title="KernelSmith Demo",
+        page_title="gpuyantra",
         page_icon="⚒️",
         layout="wide",
         initial_sidebar_state="expanded",

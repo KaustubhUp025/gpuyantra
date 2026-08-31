@@ -1,6 +1,8 @@
-# KernelSmith — Architecture
+# gpuyantra — Architecture
 
-An in-process Google ADK agent tree that generates, verifies, and hot-swaps Triton GPU
+The project is **gpuyantra**; the agent tree it is built around is **KernelSmith**, and
+every diagram and module name below uses that name because that is what they describe: an
+in-process Google ADK agent tree that generates, verifies, and hot-swaps Triton GPU
 kernels into a live Qwen2.5-1.5B inference server.
 
 The claim this system makes is narrow and checkable: **the agent writes the deployment

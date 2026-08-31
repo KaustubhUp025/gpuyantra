@@ -1,7 +1,14 @@
 /**
- * KernelSmith — Interactive Results Explorer
- * ------------------------------------------
+ * gpuyantra — Interactive Results Explorer
+ * ----------------------------------------
  * Single-page product walkthrough for the All Things Agentic Hackathon submission.
+ *
+ * NAMING. `gpuyantra` is the project; `KernelSmith` is the agent tree inside it that
+ * does the work. Judge-facing chrome — the page title, the nav mark, the hero — says
+ * gpuyantra; anything describing who profiles, writes, verifies or deploys says
+ * KernelSmith, because that is the thing being described. The Python package, the
+ * module names and the Firestore collections stay `kernelsmith` and are not renamed:
+ * the code is not a judge-facing surface.
  *
  * Requires: react >= 18, tailwindcss >= 3. No other runtime dependencies —
  * the Triton syntax highlighting is a ~40-line tokenizer in this file, on purpose:
@@ -786,9 +793,9 @@ function Nav() {
             className="grid h-6 w-6 place-items-center rounded font-mono text-[12px] font-bold"
             style={{ background: "var(--ks-accent)", color: "#08090b" }}
           >
-            K
+            G
           </span>
-          <span className="font-mono text-[13px] font-semibold tracking-tight">KernelSmith</span>
+          <span className="font-mono text-[13px] font-semibold tracking-tight">gpuyantra</span>
         </a>
         <div className="ks-scroll ml-auto flex items-center gap-1 overflow-x-auto">
           {SECTIONS.slice(1).map((s) => (
@@ -840,15 +847,15 @@ function Hero() {
           </span>
         </div>
 
-        <h1 className="mt-7 text-5xl font-semibold tracking-[-0.03em] sm:text-7xl">KernelSmith</h1>
+        <h1 className="mt-7 text-5xl font-semibold tracking-[-0.03em] sm:text-7xl">gpuyantra</h1>
         <p className="mt-3 text-xl text-[color:var(--ks-muted)] sm:text-2xl">
           Your on-call GPU kernel engineer.
         </p>
 
         <p className="mt-7 max-w-2xl text-[16px] leading-relaxed text-[color:var(--ks-text)]/85">
-          Point it at any HuggingFace model. It profiles every layer, writes verified Triton
-          kernels, and hot-swaps them into your running inference server. Skills learned on one
-          model transfer to the next.
+          Point it at any HuggingFace model. The <strong>KernelSmith</strong> agent tree profiles
+          every layer, writes verified Triton kernels, and hot-swaps them into your running
+          inference server. Skills learned on one model transfer to the next.
         </p>
 
         <div className="mt-10 grid gap-4 sm:grid-cols-3">
@@ -1498,9 +1505,9 @@ function Footer() {
                 className="grid h-6 w-6 place-items-center rounded font-mono text-[12px] font-bold"
                 style={{ background: "var(--ks-accent)", color: "#08090b" }}
               >
-                K
+                G
               </span>
-              <span className="font-mono text-[13px] font-semibold">KernelSmith</span>
+              <span className="font-mono text-[13px] font-semibold">gpuyantra</span>
             </div>
             <p className="mt-3 max-w-md text-[13.5px] leading-relaxed text-[color:var(--ks-muted)]">
               Built by Kaustubh Upadhyay for the All Things Agentic Hackathon.

@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>gpuyantra — GPU Kernel Optimization</title>
+<meta name="description"
+      content="gpuyantra: an agent tree that profiles a model on the GPU, writes verified Triton kernels, and hot-swaps them into a live inference server." />
+<meta name="color-scheme" content="dark" />
+
+<!--
+  gpuyantra — Interactive Results Explorer, packaged for a static host (Task 13b).
+
+  No npm, no bundler, no build step: React and Babel come from a CDN, and the JSX is
+  compiled in the browser.
+
+  WHY THIS FETCHES THE JSX INSTEAD OF INLINING IT
+  ----------------------------------------------
+  `kernelsmith_explorer.jsx` stays the single source of truth. Pasting its 73 KB in here
+  would mean two copies of every measured number in the repo, and the copy that is
+  actually served would be the one nobody edits. So this file fetches the JSX next to it,
+  strips the two module lines Babel cannot resolve in a browser (`import React ...` and
+  `export default ...`), compiles it, and hands the component the hooks it expected to
+  import.
+
+  The one cost: `fetch` needs an origin, so opening this file straight off disk
+  (file://...) shows the message below rather than the explorer. Serve the directory
+  instead — `python3 -m http.server 8081` — or use the Cloud Run URL. `web/Dockerfile`
+  serves both files from nginx, which is what production does.
+
+  Versions are pinned. A CDN that silently ships a new major React is the kind of thing
+  that breaks a demo the morning it is being judged.
+-->
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone@7.26.4/babel.min.js" crossorigin></script>
+<!-- Tailwind's Play CDN: the component is written in Tailwind utilities and generates
+     them at runtime, including the arbitrary values (`text-[15px]`, `text-[color:var(--ks-muted)]`)
+     it uses throughout. It watches the DOM, so classes inside the component React mounts
+     later are picked up too. -->
+<script src="https://cdn.tailwindcss.com/3.4.17"></script>
+
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; background: #08090b; color: #e8eaf0; }
+  body {
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+                   "Helvetica Neue", Arial, sans-serif;
+      -webkit-font-smoothing: antialiased;
+  }
+  /* The boot state. Replaced wholesale by React, or by an explanation if it cannot start. */
+  #boot {
+      min-height: 100vh; display: grid; place-items: center; padding: 2rem;
+      text-align: center;
+  }
+  #boot .mark {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 1.6rem; font-weight: 700; letter-spacing: -.02em;
+  }
+  #boot .note {
+      margin-top: .9rem; max-width: 46ch; line-height: 1.6; font-size: .95rem;
+      color: #8b93a7;
+  }
+  #boot code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      background: #14171d; border: 1px solid #1e2230; border-radius: 4px;
+      padding: .05rem .35rem; color: #e8eaf0;
+  }
+  #boot .spin {
+      margin: 1.4rem auto 0 auto; width: 22px; height: 22px; border-radius: 50%;
+      border: 2px solid #1e2230; border-top-color: #7c9cff;
+      animation: spin .9s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+
+<body>
+<div id="root">
+  <div id="boot">
+    <div>
+      <div class="mark">gpuyantra</div>
+      <div class="note">Compiling the explorer in your browser…</div>
+      <div class="spin"></div>
+    </div>
+  </div>
+</div>
+
+<noscript>
+  <div style="padding:2rem;max-width:46ch;margin:0 auto;text-align:center">
+    <b>gpuyantra</b> — this page renders with JavaScript. The measured results it shows
+    are also in the repository's README.
+  </div>
+</noscript>
+
+<script>
+(function () {
+  "use strict";
+
+  var SOURCE = "kernelsmith_explorer.jsx";
+
+  function fail(headline, detail) {
+    var root = document.getElementById("root");
+    root.innerHTML =
+      '<div id="boot"><div>' +
+      '<div class="mark">gpuyantra</div>' +
+      '<div class="note"><b>' + headline + "</b><br>" + detail + "</div>" +
+      "</div></div>";
+  }
+
+  if (!window.React || !window.ReactDOM || !window.Babel) {
+    fail(
+      "Could not load React or Babel.",
+      "This page pulls both from a CDN. Check the network connection and reload."
+    );
+    return;
+  }
+
+  fetch(SOURCE, { cache: "no-cache" })
+    .then(function (response) {
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      return response.text();
+    })
+    .then(function (source) {
+      // The two module lines a browser cannot resolve without a bundler or an import
+      // map. Everything else in the file is plain JSX.
+      //
+      // Both patterns are deliberately narrow and line-bound. A general
+      // /^\s*import\s+[^;]+;/gm eats 53 lines of this file, because `[^;]+` happily
+      // crosses newlines and the KERNEL_SOURCE template literal contains PYTHON that
+      // starts with `import torch` at column 0. The kernel source is the one thing on
+      // this page that must survive byte for byte.
+      var stripped = source
+        .replace(/^import\s+React[^\n]*\n/m, "")
+        .replace(/^export\s+default\s+function\s+(\w+)/m, "var __EXPLORER__ = function $1");
+
+      if (/^import\s+[^\n]*from\s+['"]/m.test(stripped)) {
+        throw new Error(
+          SOURCE + " has an import this page does not know how to resolve — it is " +
+          "packaged for a no-bundler browser and handles only the React import"
+        );
+      }
+      if (stripped.indexOf("__EXPLORER__") === -1) {
+        throw new Error(
+          "no `export default function` found in " + SOURCE + " — the packaging in " +
+          "index.html expects one"
+        );
+      }
+
+      var compiled = Babel.transform(stripped, {
+        presets: [["react", { runtime: "classic" }]],
+        filename: SOURCE,
+      }).code;
+
+      // The component imported its hooks by name. They are passed in as arguments
+      // rather than assigned to `window`, so nothing leaks into the global scope.
+      var factory = new Function(
+        "React", "ReactDOM", "useState", "useEffect", "useMemo", "useRef",
+        compiled + "\nreturn __EXPLORER__;"
+      );
+      var Explorer = factory(
+        React, ReactDOM, React.useState, React.useEffect, React.useMemo, React.useRef
+      );
+
+      ReactDOM.createRoot(document.getElementById("root")).render(
+        React.createElement(Explorer)
+      );
+    })
+    .catch(function (error) {
+      var offline = window.location.protocol === "file:";
+      fail(
+        offline ? "This page needs to be served, not opened from disk."
+                : "Could not load the explorer.",
+        offline
+          ? "Browsers block <code>fetch</code> on <code>file://</code>. Run " +
+            "<code>python3 -m http.server 8081</code> in this directory and open " +
+            "<code>http://localhost:8081</code>."
+          : String(error && error.message ? error.message : error)
+      );
+    });
+})();
+</script>
+</body>
+</html>

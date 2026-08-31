@@ -1,6 +1,7 @@
 .PHONY: setup demo audit audit-all test test-unit test-int lint format seed-skill \
         create-index serve-inference serve-ui serve-demo demo-with-dashboard \
-        deploy-dashboard harden unharden check-harden export-firestore
+        deploy-dashboard deploy-explorer deploy-web harden unharden check-harden \
+        export-firestore
 
 # --- One-command setup (README "Quick start") -------------------------------
 # `uv sync --frozen` refuses to re-resolve: a fresh L4 gets the exact transitive
@@ -106,33 +107,54 @@ demo-with-dashboard:
 	@echo "Demo complete. Dashboard at http://localhost:8502"
 	@echo "Trace saved to data/traces/"
 
-# --- Hosted replay on Cloud Run (Task 12b) ----------------------------------
-# The dashboard, in Replay mode, on a public URL: judges press Play and watch a
-# recorded L4 run rebuild itself. No GPU in the container, so `default_mode()`
-# probes the inference port, finds nothing, and opens in Replay by itself.
+# --- Hosted on Cloud Run (Task 12b; explorer added in Task 13b) --------------
+# Two public URLs, both judge-facing, both named for the PROJECT (gpuyantra)
+# rather than for the agent tree inside it (KernelSmith) — the service name is
+# what shows up in the URL:
+#
+#   gpuyantra-dashboard  the demo dashboard in Replay mode. No GPU in the
+#                        container, so `default_mode()` probes the inference
+#                        port, finds nothing, and opens in Replay by itself.
+#   gpuyantra-explorer   the static results explorer (nginx + two files).
 #
 # `gcloud run deploy --source` would use a root Dockerfile (there is none) and
-# fall through to buildpacks, so the image is built here from
-# Dockerfile.dashboard and deployed by digest.
+# fall through to buildpacks, so both images are built here and deployed by tag.
 #
 # One-time, if the Artifact Registry repo does not exist yet:
-#   gcloud artifacts repositories create kernelsmith --repository-format=docker \
+#   gcloud artifacts repositories create gpuyantra --repository-format=docker \
 #     --location=us-central1 --project=gpuyantra
 #   gcloud auth configure-docker us-central1-docker.pkg.dev
 #
 # Whatever is in data/traces/ at build time is what the hosted demo can play.
-DASHBOARD_IMAGE ?= us-central1-docker.pkg.dev/gpuyantra/kernelsmith/dashboard:latest
+DASHBOARD_IMAGE ?= us-central1-docker.pkg.dev/gpuyantra/gpuyantra/dashboard:latest
+EXPLORER_IMAGE  ?= us-central1-docker.pkg.dev/gpuyantra/gpuyantra/explorer:latest
 
 deploy-dashboard:
 	docker build -f Dockerfile.dashboard -t $(DASHBOARD_IMAGE) .
 	docker push $(DASHBOARD_IMAGE)
-	gcloud run deploy kernelsmith-dashboard \
+	gcloud run deploy gpuyantra-dashboard \
 	  --image=$(DASHBOARD_IMAGE) \
 	  --project=gpuyantra --region=us-central1 \
 	  --allow-unauthenticated --port=8080 \
 	  --min-instances=0 --max-instances=1 \
 	  --memory=1Gi --cpu=1 --timeout=3600 \
 	  --set-env-vars=GOOGLE_CLOUD_PROJECT=gpuyantra
+
+# nginx serving index.html + kernelsmith_explorer.jsx. No build step: the JSX is
+# compiled in the browser, so the file in the repo is the file that is served and
+# there is no second copy of any measured number.
+deploy-explorer:
+	docker build -t $(EXPLORER_IMAGE) web/
+	docker push $(EXPLORER_IMAGE)
+	gcloud run deploy gpuyantra-explorer \
+	  --image=$(EXPLORER_IMAGE) \
+	  --project=gpuyantra --region=us-central1 \
+	  --allow-unauthenticated --port=8080 \
+	  --min-instances=0 --max-instances=1 \
+	  --memory=512Mi --cpu=1
+
+# Both public surfaces, in one go.
+deploy-web: deploy-dashboard deploy-explorer
 
 # --- Security (spec 12) -----------------------------------------------------
 # The verifier is the trust anchor: it is the only thing standing between a

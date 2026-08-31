@@ -1,9 +1,13 @@
-# KernelSmith
+# gpuyantra
 
-An in-process [Google ADK](https://google.github.io/adk-docs/) agent tree that autonomously
-profiles PyTorch model operations, generates optimized Triton GPU kernels, verifies them
-against correctness and anti-reward-hacking criteria, and hot-swaps them into a live
-Qwen2.5-1.5B inference server on a single NVIDIA L4.
+**gpuyantra** is the project; **KernelSmith** is the agent tree inside it that does the
+work — an in-process [Google ADK](https://google.github.io/adk-docs/) tree that
+autonomously profiles PyTorch model operations, generates optimized Triton GPU kernels,
+verifies them against correctness and anti-reward-hacking criteria, and hot-swaps them
+into a live Qwen2.5-1.5B inference server on a single NVIDIA L4.
+
+The Python package, its modules and the Firestore collections are all named `kernelsmith`
+and stay that way: the agent tree is what they implement.
 
 The claim is narrow and checkable: **the agent writes its own deployment contract, and a
 deterministic verifier decides whether it is true.** Every published kernel-generation
@@ -134,6 +138,8 @@ make serve-inference  # FastAPI on :8000
 make serve-ui         # operator dashboard (Streamlit) on :8501
 make serve-demo       # demo/recording dashboard on :8502 (live + replay)
 make deploy-dashboard # build + deploy the replay dashboard to Cloud Run
+make deploy-explorer  # build + deploy the static results explorer to Cloud Run
+make deploy-web       # both public surfaces in one go
 make create-index     # ONCE: composite vector index on `skills` (minutes to build)
 make seed-skill       # insert the hand-written RMSNorm seed skill
 make harden           # chmod 444 the verifier scripts
