@@ -206,6 +206,47 @@ TURN_2 = (
 DEFAULT_OP = "rmsnorm"
 DEFAULT_HIDDEN_SIZE = 1536
 
+# --------------------------------------------------------------------------- #
+# Task 14 — the live inference panel and the target selectors
+# --------------------------------------------------------------------------- #
+
+#: Prompts a judge can send with one click. Short answers on purpose: the point is the
+#: throughput number and that the text stays coherent across a hot-swap, not the essay.
+PRESET_PROMPTS: tuple[tuple[str, str], ...] = (
+    ("🇫🇷 Capital of France", "What is the capital of France?"),
+    ("🧮 Explain quantum computing", "Explain quantum computing in simple terms."),
+    ("🐍 Write some Python", "Write a Python function that sorts a list of numbers."),
+    ("🤖 Tell a short story", "Tell me a short story about a robot learning to paint."),
+)
+#: Two per row, so each button has room for its label at 1080p.
+PRESETS_PER_ROW = 2
+CHAT_MAX_TOKENS = 48
+#: Generation is GPU-bound and synchronous; the server holds the swap lock while it runs.
+CHAT_TIMEOUT_S = 120.0
+#: Kept in state; the panel shows the most recent few.
+CHAT_HISTORY_KEPT = 8
+CHAT_HISTORY_SHOWN = 4
+
+#: Ops the agent tree can be pointed at, in the order the selector offers them, with a
+#: description for someone who has never read a transformer's source. The keys are
+#: `OP_REGISTRY` keys (`kernelsmith/tools/profiler_tool.py`) — the selector intersects
+#: with that registry at runtime, so it can never offer something the Profiler cannot
+#: build. Deployability is a separate question: see `op_deploys`.
+OP_LABELS: dict[str, str] = {
+    "rmsnorm": "RMSNorm — rescales the numbers flowing between layers (Qwen2.5)",
+    "layernorm": "LayerNorm — the same job, the way GPT-2 does it",
+    "silu": "SiLU — the activation inside the feed-forward block",
+    "mlp": "MLP / SwiGLU — the whole feed-forward block",
+    "softmax": "Softmax — turns attention scores into weights",
+    "rope": "RoPE — rotary position embedding",
+}
+
+#: `rope` is excluded from "deployable" even though `PATCHABLE_OPS` lists it, because
+#: `apply_rotary_pos_emb` is a module-level FUNCTION that `swap_op` cannot reach —
+#: `patchable_ops.py` says so in its own comment and the swap correctly refuses.
+#: Offering it as deployable would promise a demo beat that cannot fire.
+OP_NOT_REALLY_DEPLOYABLE = frozenset({"rope"})
+
 
 CSS = """
 <style>
@@ -285,6 +326,46 @@ CSS = """
   /* Plain-English detail under an event headline. */
   .ks-detail { font-size: .93rem; opacity: .8; line-height: 1.55;
                margin: .15rem 0 .55rem 0; }
+
+  /* --- vertical rhythm (Task 14, problem 3) ------------------------------- */
+  /* A spacer element, used where a divider would be too loud. */
+  .ks-gap { height: 1.6rem; }
+  /* Sections breathe: the chart is not pressed against the map above it, and the chat
+     panel is not pressed against the timeline. */
+  hr[data-testid="stDivider"] { margin: 1.9rem 0 1.7rem 0; }
+  [data-testid="stVerticalBlockBorderWrapper"] { border-radius: 10px; }
+
+  /* --- try-the-model panel ------------------------------------------------ */
+  /* Preset prompts must look like buttons on a dark background, not flat text. */
+  [data-testid="stButton"] button {
+      border: 1px solid rgba(255, 255, 255, .16);
+      background: rgba(255, 255, 255, .04);
+      padding: .55rem .8rem;
+      font-size: .95rem;
+      transition: border-color .12s ease, background .12s ease;
+  }
+  [data-testid="stButton"] button:hover {
+      border-color: rgba(245, 158, 11, .55);
+      background: rgba(245, 158, 11, .10);
+  }
+  /* ... except the primary actions (Start Run, Play, Send), which keep the theme's
+     accent so the one thing to press is obvious. */
+  [data-testid="stButton"] button[kind="primary"],
+  [data-testid="stFormSubmitButton"] button {
+      border-color: transparent;
+  }
+  /* The model's answer: its own region, readable at a distance, wrapping long output. */
+  .ks-answer {
+      margin: .55rem 0 .15rem 0;
+      padding: .75rem .9rem;
+      background: rgba(255, 255, 255, .045);
+      border-left: 3px solid #10b981;
+      border-radius: 6px;
+      font-size: 1rem;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+  }
 
   code, pre, .stCode { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   /* Inline code inside a plain-English sentence should not shout. */
@@ -1339,6 +1420,88 @@ def iteration_label(metrics: dict[str, Any]) -> tuple[str, str | None]:
 
 
 # --------------------------------------------------------------------------- #
+# The optimization target (Task 14, problem 2)
+# --------------------------------------------------------------------------- #
+
+
+def available_ops() -> list[str]:
+    """The ops the selector may offer: `OP_LABELS` ∩ `OP_REGISTRY`, best target first.
+
+    Intersected with the real registry so a dropdown can never offer an op the Profiler
+    would raise `KeyError` on. The import is optional: `profiler_tool` pulls in torch, and
+    the replay container deliberately has none — there the labelled list is used as-is,
+    which is the same list any machine with the dependency computes.
+    """
+    try:
+        from kernelsmith.tools.profiler_tool import OP_REGISTRY
+
+        known = [op for op in OP_LABELS if op in OP_REGISTRY]
+    except Exception:  # noqa: BLE001 — no torch is not a broken dropdown
+        known = list(OP_LABELS)
+    # Deployable ops first: those are the ones whose runs can end on a live server.
+    return sorted(known, key=lambda op: (not op_deploys(op), list(OP_LABELS).index(op)))
+
+
+def op_deploys(op_name: str) -> bool:
+    """Whether a verified kernel for this op can be hot-swapped into the live server."""
+    if op_name in OP_NOT_REALLY_DEPLOYABLE:
+        return False
+    try:
+        from kernelsmith.inference_server.patchable_ops import PATCHABLE_OPS
+
+        return op_name in PATCHABLE_OPS
+    except Exception:  # noqa: BLE001
+        return op_name in {"rmsnorm", "layernorm", "swiglu"}
+
+
+def op_option_label(op_name: str) -> str:
+    """The dropdown's text: what the op is, and how far a run on it can get."""
+    described = OP_LABELS.get(op_name, op_name)
+    reach = (
+        "deploys to the live server"
+        if op_deploys(op_name)
+        else "profiled and verified only — no live deployment"
+    )
+    return f"{described} · {reach}"
+
+
+def hidden_size_options() -> list[tuple[int, str]]:
+    """`(hidden_size, "which model uses it")` from `MODEL_REGISTRY`, served model first.
+
+    Read from config rather than typed out, so a model added to the registry appears
+    here. Two models sharing a size collapse into one entry naming both.
+    """
+    try:
+        from kernelsmith.config import MODEL_REGISTRY, SERVED_MODEL
+    except Exception:  # noqa: BLE001
+        return [(DEFAULT_HIDDEN_SIZE, "Qwen2.5-1.5B — the served model")]
+
+    by_size: dict[int, list[str]] = {}
+    served_size = None
+    for key, spec in MODEL_REGISTRY.items():
+        size = int(spec.get("hidden_size") or 0)  # type: ignore[arg-type]
+        if not size:
+            continue
+        name = str(spec.get("hf_id") or key).split("/")[-1]
+        by_size.setdefault(size, []).append(name)
+        if str(spec.get("hf_id")) == SERVED_MODEL:
+            served_size = size
+
+    options = []
+    for size, names in by_size.items():
+        note = " / ".join(names)
+        if size == served_size:
+            note += " — the served model"
+        options.append((size, note))
+    return sorted(options, key=lambda item: (item[0] != served_size, -item[0]))
+
+
+def hidden_size_label(size: int, note: str) -> str:
+    """One dropdown row: the number, then which model it belongs to."""
+    return f"{size} — {note}"
+
+
+# --------------------------------------------------------------------------- #
 # Traces and modes (Task 12b, problem 6 — the hosted replay)
 # --------------------------------------------------------------------------- #
 
@@ -1423,6 +1586,8 @@ def init_state() -> None:
     state.setdefault("timeline_events", [])
     state.setdefault("stats_ok", False)
     state.setdefault("tokens_before_swap", None)
+    state.setdefault("chat_history", [])
+    state.setdefault("chat_prompt", "")
     state.setdefault("active_agent", None)
     state.setdefault("user_id", "operator")
     state.setdefault("session_id", "")
@@ -1655,6 +1820,126 @@ def render_summary_card(target: Any, text: str, metrics: dict[str, Any]) -> None
         st.markdown(text)
 
 
+# --------------------------------------------------------------------------- #
+# Try the model (Task 14, problem 1)
+# --------------------------------------------------------------------------- #
+
+
+def render_chat_panel(target: Any) -> None:
+    """Send prompts to the live server and show what came back, and how fast.
+
+    This is what makes the Tokens/s card mean anything during a demo: the server's meter
+    only moves when somebody asks the model for something, and until now nobody did.
+
+    Live mode only — replaying a recording cannot generate text, and a panel that looked
+    live while replaying would be the most misleading thing on the page.
+    """
+    state = st.session_state
+    box = target.container()
+    box.markdown("#### 💬 Try the model")
+    box.caption(
+        "Send a prompt to the Qwen2.5-1.5B server this system is optimizing. Send one "
+        "before the swap and one after it to feel the difference — and to see that the "
+        "answers stay coherent, which is the half of the claim a speedup cannot prove."
+    )
+
+    if not inference_server_is_up():
+        box.info(
+            "**No inference server is running on this machine.** Start it with "
+            "`make serve-inference` (it needs the GPU and about 3 GB of VRAM), then "
+            "reload this page. Everything else on the dashboard works without it."
+        )
+        return
+
+    # --- preset prompts, two per row so each label fits ---
+    pending: str | None = None
+    presets = list(PRESET_PROMPTS)
+    for start in range(0, len(presets), PRESETS_PER_ROW):
+        row = presets[start : start + PRESETS_PER_ROW]
+        columns = box.columns(PRESETS_PER_ROW, gap="medium")
+        for column, (label, prompt) in zip(columns, row, strict=False):
+            if column.button(label, key=f"preset-{start}-{label}", width="stretch"):
+                pending = prompt
+
+    # --- and a free-text box. Deliberately NOT an `st.form`: a form created in this
+    # container leaves a form context that Streamlit then finds when the SIDEBAR's
+    # "Start Run" button is created on the next run, and refuses it with "st.button()
+    # can't be used in an st.form()". A plain input plus a button has no such coupling,
+    # and `st.text_input` only reruns on Enter or blur, not per keystroke. ---
+    text_column, send_column = box.columns([5, 1], gap="small")
+    typed = text_column.text_input(
+        "Your prompt",
+        key="chat_prompt",
+        placeholder="Ask the model something…",
+        label_visibility="collapsed",
+    )
+    if send_column.button("Send", type="primary", width="stretch") and typed.strip():
+        pending = typed.strip()
+
+    if pending:
+        with box.status(f"Asking the model — “{_truncate_line(pending, 60)}”", expanded=False):
+            record_chat(send_prompt(pending))
+
+    render_chat_history(box, list(state.get("chat_history") or []))
+
+
+def render_chat_history(target: Any, history: list[dict[str, Any]]) -> None:
+    """The last few exchanges, newest first, each with its own measured throughput."""
+    if not history:
+        target.caption(
+            "No requests yet. The Tokens/s card above stays blank until the model is "
+            "asked for something."
+        )
+        return
+
+    pair = chat_throughput_pair(history)
+    if pair:
+        before, after = pair
+        change = after / before if before else 0.0
+        target.success(
+            f"**Before the swap: {before:.1f} tokens/s · after: {after:.1f} tokens/s** — "
+            f"{change:.2f}× on the same prompt length, measured end to end by the server."
+        )
+
+    for record in reversed(history[-CHAT_HISTORY_SHOWN:]):
+        card = target.container(border=True)
+        head, meta = card.columns([3, 2], gap="medium")
+        head.markdown(f"**You:** {record.get('prompt', '')}")
+        meta.caption(_chat_meta(record))
+
+        if not record.get("ok"):
+            card.warning(f"The request failed — {record.get('error') or 'no reason given'}")
+            continue
+
+        text = str(record.get("text") or "").strip()
+        card.markdown(
+            f"<div class='ks-answer'>{text or '<em>the model returned nothing</em>'}</div>",
+            unsafe_allow_html=True,
+        )
+        card.caption(_chat_timing(record))
+
+
+def _chat_meta(record: dict[str, Any]) -> str:
+    """Which forward served this request, and when. Never guessed from ordering."""
+    kernel = str(record.get("kernel") or "unknown")
+    served = {
+        "none": "stock PyTorch",
+        "unknown": "server did not say which kernel",
+    }.get(kernel, f"generated kernel (`{kernel}`)")
+    return f"{record.get('at', '')} · {served}"
+
+
+def _chat_timing(record: dict[str, Any]) -> str:
+    """ "Generated 48 tokens in 2.1 s — 22.9 tokens/s", from the server's own numbers."""
+    tokens = record.get("tokens") or 0
+    seconds = _as_float(record.get("time_ms")) / 1000.0
+    rate = record.get("tokens_per_s")
+    line = f"Generated {tokens} token{'s' if tokens != 1 else ''} in {seconds:.2f} s"
+    if rate:
+        line += f" — {float(rate):.1f} tokens/s"
+    return line + ". Timed by the server, so this dashboard's own overhead is not in it."
+
+
 def open_turn(container: Any, author: str, headline: str, *, running: bool) -> Any:
     """Create the `st.status` for one agent turn and return its handle.
 
@@ -1735,20 +2020,29 @@ class PageSlots:
     chart: Any
     timeline: Any
     banners: Any
+    chat: Any
 
 
 def build_page_skeleton() -> PageSlots:
-    """Lay out the page once. Callers fill the slots; nobody adds top-level elements."""
+    """Lay out the page once. Callers fill the slots; nobody adds top-level elements.
+
+    The chat region (Task 14) is part of the skeleton even in Replay mode, where it stays
+    empty: a section that exists in some runs and not others is what caused the duplicate
+    metrics row this skeleton was introduced to fix.
+    """
     header = st.empty()
     st.caption(ORIENTATION)
     st.divider()
     notice = st.empty()
 
-    left, right = st.columns([1.25, 2.3], gap="large")
+    # The map is a diagram and reads fine small; the step log carries sentences and gets
+    # the room. `gap="large"` is what stops the two columns touching at 1080p.
+    left, right = st.columns([1, 2.45], gap="large")
     with left:
         st.markdown("##### Who is working")
         graph = st.empty()
         who = st.empty()
+        st.markdown("<div class='ks-gap'></div>", unsafe_allow_html=True)
         chart = st.empty()
     with right:
         st.markdown("##### What is happening, step by step")
@@ -1756,6 +2050,7 @@ def build_page_skeleton() -> PageSlots:
 
     st.divider()
     banners = st.container()
+    chat = st.container()
     return PageSlots(
         header=header,
         notice=notice,
@@ -1764,6 +2059,7 @@ def build_page_skeleton() -> PageSlots:
         chart=chart,
         timeline=timeline,
         banners=banners,
+        chat=chat,
     )
 
 
@@ -2090,6 +2386,116 @@ def poll_stats() -> None:
         state["stats_ok"] = True
 
 
+def generate_url() -> str:
+    from kernelsmith.config import INFERENCE_HOST, INFERENCE_PORT
+
+    return f"http://{INFERENCE_HOST}:{INFERENCE_PORT}/generate"
+
+
+def send_prompt(prompt: str, max_tokens: int = CHAT_MAX_TOKENS) -> dict[str, Any]:
+    """POST one prompt to the live server and return what it measured (Task 14).
+
+    The tokens/s here is the server's own numbers — `tokens / time_ms` out of the
+    `/generate` response — not a stopwatch around the HTTP call, so it does not include
+    this dashboard's request overhead. Nothing is estimated: a failure returns `ok: False`
+    with the reason, because "the model said nothing" and "the server is down" must not
+    look the same on screen.
+
+    `kernel` records which forward was live when the request ran, read from `/stats`
+    afterwards. That is what lets the panel label a row "stock PyTorch" or "Triton kernel"
+    and show an honest before/after pair.
+    """
+    import httpx
+
+    record: dict[str, Any] = {
+        "prompt": prompt,
+        "at": time.strftime("%H:%M:%S"),
+        "max_tokens": max_tokens,
+        "ok": False,
+        "text": "",
+        "tokens": 0,
+        "time_ms": 0.0,
+        "tokens_per_s": None,
+        "kernel": "unknown",
+        "error": "",
+    }
+    try:
+        response = httpx.post(
+            generate_url(),
+            json={"prompt": prompt, "max_tokens": int(max_tokens), "temperature": 0.0},
+            timeout=CHAT_TIMEOUT_S,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except Exception as exc:  # noqa: BLE001 — a dead server is an answer, not a crash
+        record["error"] = f"{type(exc).__name__}: {exc}"
+        return record
+
+    if not isinstance(payload, dict):
+        record["error"] = f"the server returned {type(payload).__name__}, expected an object"
+        return record
+
+    tokens = int(payload.get("tokens") or 0)
+    elapsed_ms = _as_float(payload.get("time_ms"))
+    record.update(
+        ok=True,
+        text=str(payload.get("text") or ""),
+        tokens=tokens,
+        time_ms=elapsed_ms,
+        tokens_per_s=(tokens / (elapsed_ms / 1000.0)) if tokens and elapsed_ms > 0 else None,
+        kernel=active_kernel_now(),
+    )
+    return record
+
+
+def active_kernel_now() -> str:
+    """Which kernel the server says is live, right now. "unknown" if it will not say."""
+    import httpx
+
+    from kernelsmith.config import INFERENCE_HOST, INFERENCE_PORT
+
+    try:
+        response = httpx.get(
+            f"http://{INFERENCE_HOST}:{INFERENCE_PORT}/stats", timeout=STATS_TIMEOUT_S
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except Exception:  # noqa: BLE001
+        return "unknown"
+    return str(payload.get("active_kernel") or "none") if isinstance(payload, dict) else "unknown"
+
+
+def record_chat(record: dict[str, Any]) -> None:
+    """Append one exchange to the panel's history, oldest dropped past the cap."""
+    state = st.session_state
+    history = list(state.get("chat_history") or [])
+    history.append(record)
+    state["chat_history"] = history[-CHAT_HISTORY_KEPT:]
+
+
+def chat_throughput_pair(history: list[dict[str, Any]]) -> tuple[float, float] | None:
+    """`(before, after)` tokens/s across the swap, or None until both sides exist.
+
+    "Before" is the last successful request that ran on the stock forwards, "after" the
+    last one that ran on a generated kernel — taken from what `/stats` reported at the
+    time of each request, never inferred from ordering. Two requests on the same side of
+    the swap therefore produce nothing, which is correct: there is no comparison yet.
+    """
+    before = after = None
+    for record in history:
+        rate = record.get("tokens_per_s")
+        if not record.get("ok") or not rate:
+            continue
+        kernel = str(record.get("kernel") or "")
+        if kernel in {"none", ""}:
+            before = float(rate)
+        elif kernel != "unknown":
+            after = float(rate)
+    if before is None or after is None:
+        return None
+    return before, after
+
+
 @st.cache_data(ttl=HEALTH_CACHE_S, show_spinner=False)
 def inference_server_is_up() -> bool:
     """Whether `/health` answers. Cached, because it gates a decision made every rerun.
@@ -2213,6 +2619,23 @@ def _live_elapsed() -> float:
     return time.monotonic() - logger_.start_time
 
 
+def should_autorefresh(consumer: Any, state: Any) -> bool:
+    """Whether the 1 Hz whole-script rerun is needed right now.
+
+    Needed while the agent tree is working (the timeline builds from drained events) and
+    while turn 1 has finished but turn 2 has not been sent — that follow-up is fired from
+    a tick, and without it the run stops before upsert and hot-swap.
+
+    Not needed when nothing is running: the page then only has to react to clicks, and a
+    tick would interrupt an in-flight generation for no gain.
+    """
+    try:
+        running = bool(consumer.is_running)
+    except Exception:  # noqa: BLE001 — a consumer that will not say is treated as busy
+        running = True
+    return running or bool(state.get("awaiting_followup"))
+
+
 def render_autorefresh() -> None:
     """Refresh at 1 Hz, or fall back to a button if the component is unavailable."""
     try:
@@ -2284,7 +2707,16 @@ def render_live() -> None:
     with slots.banners:
         render_banners(metrics)
         maybe_celebrate(metrics)
-    render_autorefresh()
+
+    render_chat_panel(slots.chat)
+
+    # NOT unconditional. `st_autorefresh` reruns the whole script, and a rerun landing
+    # while a `/generate` request is in flight kills the script that is waiting for it —
+    # the answer is lost and the panel looks broken. There is nothing to poll for unless
+    # the agent tree is actually working, so the tick is scoped to that; every chat
+    # request reruns the page by itself, which is what refreshes Tokens/s.
+    if should_autorefresh(consumer, state):
+        render_autorefresh()
 
 
 # --------------------------------------------------------------------------- #
@@ -2454,16 +2886,44 @@ def render_sidebar() -> dict[str, Any]:
 
     controls: dict[str, Any] = {"mode": mode}
     if mode == MODE_LIVE:
-        op_name = st.sidebar.text_input(
-            "Operation to optimize",
-            value=DEFAULT_OP,
-            help="Which piece of the model to point the agents at.",
+        st.sidebar.markdown("##### What to optimize")
+
+        ops = available_ops()
+        default_op = ops.index(DEFAULT_OP) if DEFAULT_OP in ops else 0
+        op_name = st.sidebar.selectbox(
+            "Layer type",
+            ops,
+            index=default_op,
+            format_func=op_option_label,
+            help=(
+                "Which kind of layer the agents should try to make faster. RMSNorm is the "
+                "Qwen2.5 target this project's headline number comes from."
+            ),
         )
-        hidden_size = st.sidebar.number_input(
-            "Hidden size", value=DEFAULT_HIDDEN_SIZE, min_value=1, step=64
+
+        sizes = hidden_size_options()
+        values = [size for size, _ in sizes]
+        notes = dict(sizes)
+        default_size = values.index(DEFAULT_HIDDEN_SIZE) if DEFAULT_HIDDEN_SIZE in values else 0
+        hidden_size = st.sidebar.selectbox(
+            "Model width",
+            values,
+            index=default_size,
+            format_func=lambda size: hidden_size_label(size, notes.get(size, "")),
+            help=(
+                "How many numbers each layer carries — it sets the size of the tensors "
+                "the kernel is written for. 1536 is the model the server is running."
+            ),
         )
+        if not op_deploys(op_name):
+            st.sidebar.warning(
+                "This layer type can be profiled and verified, but not hot-swapped into "
+                "the live server. The run will stop after the verdict."
+            )
+
         controls["op_name"] = op_name
         controls["hidden_size"] = int(hidden_size)
+        st.sidebar.divider()
         if st.sidebar.button("▶ Start Run", type="primary", width="stretch"):
             start_run(op_name, int(hidden_size))
         st.sidebar.caption(f"Trace → `{DEFAULT_TRACE_DIR}/`")

@@ -1411,3 +1411,68 @@ errors.
 
 *Source: Task 13b, 2026-08-31. Gates: 671 tests pass, `make lint` clean, both images build
 and serve.*
+
+---
+
+## Task 14 — the Tokens/s card had nothing to measure, and the target inputs were free text
+
+**Nobody was asking the model for anything.** `TokenMeter` only moves when `/generate` is
+called, so during a demo the Tokens/s card sat at "—" or `0.0` no matter how well the swap
+had gone — the one metric that proves the point had no input. `render_chat_panel` (Live
+mode only) sends prompts to the running server: four one-click presets in a 2×2 grid, a
+free-text box, the model's answer in its own bounded region, and the measured rate under
+each exchange.
+
+Three decisions in there worth keeping:
+
+- **The throughput is the server's own arithmetic** — `tokens / time_ms` out of the
+  `/generate` response — not a stopwatch around the HTTP call, so this dashboard's
+  overhead is not quietly added to the model's cost.
+- **Each exchange records which forward served it**, read from `/stats` right after the
+  request, so the before/after pair (`chat_throughput_pair`) is built from what the server
+  said was live at the time and never inferred from the order of the list. Two requests on
+  the same side of a swap therefore produce no comparison, which is correct.
+- **A zero-token response yields no rate at all** rather than a division or a plausible
+  number, and an unreachable server is `ok: False` with the reason — the panel says the
+  server is not running and tells you how to start it.
+
+**`st.form` is unusable here, and the failure is remote from the cause.** The prompt box
+was originally an `st.form`. A form created in this container leaves a form context that
+Streamlit finds when the **sidebar's** "Start Run" button is created on the next run, and
+refuses it: *"st.button() can't be used in an st.form()"*. The whole live page died, with
+the traceback pointing at the sidebar. It is a plain `st.text_input` plus an `st.button`
+now (which only reruns on Enter or blur anyway). Invisible until a server is reachable,
+because the panel returns early otherwise — which is why the tests run against a stub
+server rather than only checking the no-server path.
+
+**The 1 Hz auto-refresh is no longer unconditional.** `st_autorefresh` reruns the whole
+script, and a rerun landing while a `/generate` is in flight kills the script that is
+waiting for it — the answer is lost and the panel looks broken. `should_autorefresh()`
+scopes the tick to when the agent tree is actually working (`consumer.is_running`) or when
+turn 2 is still owed (`awaiting_followup`, which is fired from a tick and must keep
+ticking, or upsert and hot-swap never run). Idle pages do not tick: every chat request
+reruns the page by itself, which is what refreshes the card.
+
+**The target inputs are dropdowns built from the registries, not free text.** `available_ops()`
+is `OP_LABELS` ∩ `OP_REGISTRY`, so the selector can never offer an op `build_op` would
+raise `KeyError` on, and `hidden_size_options()` comes from `MODEL_REGISTRY`. Both imports
+are optional — `profiler_tool` pulls in torch and the replay container has none, so it
+falls back to the labelled list. Each option says what the layer is *and how far a run on
+it can get*: `rmsnorm` and `layernorm` "deploy to the live server", everything else is
+"profiled and verified only". Two honesty notes there:
+
+- **`rope` is not offered as deployable** even though `PATCHABLE_OPS` lists it, because
+  `apply_rotary_pos_emb` is a module-level function `swap_op` cannot reach — the file says
+  so itself, and the swap refuses. Listing it would promise a beat that cannot fire.
+- **`mlp` cannot round-trip today**: the Profiler's registry calls it `mlp`, the server's
+  `PATCHABLE_OPS` calls it `swiglu`, and one `op_name` travels to both. It is therefore
+  offered as profile-and-verify only rather than papered over with an alias in the UI.
+
+Two departures from the task brief, both because the code says otherwise: **`batchnorm2d`
+is not in the dropdown** (it is not in `OP_REGISTRY`, so the Profiler cannot build it —
+ResNet-50 is an audit target, not an optimization target), and ResNet-50's width is
+**2048**, per `MODEL_REGISTRY`, not the 64 the brief suggested.
+
+*Source: Task 14, 2026-08-31. Gates: 702 tests pass (31 new, against a stub inference
+server on an ephemeral port), `make lint` clean, a launch logs zero deprecation warnings,
+and the slim container still resolves the dropdowns with no torch installed.*

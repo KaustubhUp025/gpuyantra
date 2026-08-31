@@ -136,7 +136,8 @@ make lint             # ruff check + format --check
 make format           # ruff format
 make serve-inference  # FastAPI on :8000
 make serve-ui         # operator dashboard (Streamlit) on :8501
-make serve-demo       # demo/recording dashboard on :8502 (live + replay)
+make serve-demo       # demo/recording dashboard on :8502 (live + replay,
+                      #   with a panel for sending prompts to the live model)
 make deploy-dashboard # build + deploy the replay dashboard to Cloud Run
 make deploy-explorer  # build + deploy the static results explorer to Cloud Run
 make deploy-web       # both public surfaces in one go
