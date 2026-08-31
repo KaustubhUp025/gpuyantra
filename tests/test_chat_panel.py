@@ -469,3 +469,90 @@ def test_replay_mode_has_no_inference_panel(live_app, stub: StubServer):
     for preset_label, _prompt in PRESET_PROMPTS:
         assert preset_label not in labels
     assert "Send" not in labels
+
+
+# --------------------------------------------------------------------------- #
+# Task 15, problem 1 — every answer was exactly 48 tokens
+# --------------------------------------------------------------------------- #
+
+
+def test_the_request_asks_for_enough_tokens_to_finish_a_sentence():
+    """48 was the cause of "every response is exactly 48 tokens": it was the ask.
+
+    128 is `GenerateRequest.max_tokens`'s own default in `inference_server/server.py`,
+    whose declared range is 1..2048 — the slider's ceiling stays well under that because
+    generation holds the server's swap lock while it runs.
+    """
+    from kernelsmith.ui.demo_dashboard import (
+        CHAT_MAX_TOKENS,
+        CHAT_TOKENS_MAX,
+        CHAT_TOKENS_MIN,
+    )
+
+    assert CHAT_MAX_TOKENS == 128
+    assert CHAT_TOKENS_MIN <= CHAT_MAX_TOKENS <= CHAT_TOKENS_MAX <= 2048
+
+
+def test_the_server_still_accepts_the_range_the_slider_offers():
+    """Read out of the server's own schema, so a narrowed bound there fails here."""
+    source = (
+        Path(__file__).resolve().parent.parent / "kernelsmith" / "inference_server" / "server.py"
+    ).read_text(encoding="utf-8")
+    import re
+
+    from kernelsmith.ui.demo_dashboard import CHAT_TOKENS_MAX, CHAT_TOKENS_MIN
+
+    match = re.search(r"max_tokens: int = Field\(default=(\d+), ge=(\d+), le=(\d+)\)", source)
+    assert match, "the server's max_tokens field changed shape"
+    _default, low, high = (int(group) for group in match.groups())
+    assert low <= CHAT_TOKENS_MIN and high >= CHAT_TOKENS_MAX
+
+
+def test_the_default_length_is_what_actually_goes_over_the_wire(live_app, stub: StubServer):
+    from kernelsmith.ui.demo_dashboard import CHAT_MAX_TOKENS
+
+    app = live_app
+    next(button for button in app.button if button.label == PRESET_PROMPTS[0][0]).click().run()
+    assert exceptions(app) == []
+    assert stub.calls[-1]["max_tokens"] == CHAT_MAX_TOKENS
+
+
+def test_the_response_length_is_the_operators_choice(live_app, stub: StubServer):
+    """The slider is the fix for the hardcoded number, so it has to reach the request."""
+    app = live_app
+    slider = next(item for item in app.sidebar.slider if item.label == "Response length")
+    slider.set_value(256).run()
+    next(button for button in app.button if button.label == PRESET_PROMPTS[0][0]).click().run()
+
+    assert exceptions(app) == []
+    assert stub.calls[-1]["max_tokens"] == 256
+
+
+def test_with_no_slider_on_screen_the_default_still_stands():
+    """Replay mode never creates the widget, so Streamlit drops the key."""
+    import streamlit as st
+
+    from kernelsmith.ui.demo_dashboard import CHAT_MAX_TOKENS, chat_tokens
+
+    st.session_state.pop("chat_max_tokens", None)
+    assert chat_tokens() == CHAT_MAX_TOKENS
+    st.session_state["chat_max_tokens"] = 256
+    assert chat_tokens() == 256
+    st.session_state["chat_max_tokens"] = 0
+    assert chat_tokens() == CHAT_MAX_TOKENS
+    st.session_state.pop("chat_max_tokens", None)
+
+
+def test_the_panel_folds_shut_only_while_the_agents_are_working(live_app, stub: StubServer):
+    """Problem 4: open before and after a run — that is when the demo uses it."""
+    app = live_app
+    assert exceptions(app) == []
+    labels = [button.label for button in app.button]
+    assert PRESET_PROMPTS[0][0] in labels, "the panel's controls must exist while idle"
+
+    import inspect
+
+    from kernelsmith.ui.demo_dashboard import render_live
+
+    body = inspect.getsource(render_live)
+    assert "render_chat_panel(slots.chat, expanded=not working)" in body

@@ -220,7 +220,19 @@ PRESET_PROMPTS: tuple[tuple[str, str], ...] = (
 )
 #: Two per row, so each button has room for its label at 1080p.
 PRESETS_PER_ROW = 2
-CHAT_MAX_TOKENS = 48
+#: How many tokens a chat request asks for, unless the sidebar slider says otherwise.
+#:
+#: Task 15, problem 1: this was 48, which is where "every answer is exactly 48 tokens"
+#: came from — the server was cutting every reply off mid-sentence at the length this
+#: dashboard asked for. 128 is `GenerateRequest.max_tokens`'s own default in
+#: `inference_server/server.py` and produces two or three finished sentences.
+CHAT_MAX_TOKENS = 128
+#: The slider's range. The server accepts 1..2048 (`Field(ge=1, le=2048)`); the ceiling
+#: here is far below that because generation is synchronous and holds the swap lock —
+#: a 2048-token request would stall the demo for a minute and block a hot-swap behind it.
+CHAT_TOKENS_MIN = 32
+CHAT_TOKENS_MAX = 512
+CHAT_TOKENS_STEP = 32
 #: Generation is GPU-bound and synchronous; the server holds the swap lock while it runs.
 CHAT_TIMEOUT_S = 120.0
 #: Kept in state; the panel shows the most recent few.
@@ -250,8 +262,21 @@ OP_NOT_REALLY_DEPLOYABLE = frozenset({"rope"})
 
 CSS = """
 <style>
+  /* ======================================================================= *
+   * Task 15 — one type scale for the whole page.
+   *
+   * Everything here is size, weight, spacing and colour. Not one rule changes
+   * a number, hides a failure or rounds a result; the page says exactly what
+   * it said before, at a size that survives a 1080p screen recording watched
+   * on a laptop. Streamlit's defaults (14px body, 12px captions) do not.
+   *
+   * The scale is set on the app container rather than on `html`, so it lifts
+   * every inherited text size without also rescaling the `rem` values the
+   * cards, the map and the chart are laid out in.
+   * ======================================================================= */
+
   /* Tighter than the default so the timeline starts above the fold at 1080p, but not
-     so tight that Streamlit's fixed header clips the title — 3.5rem clears it. */
+     so tight that Streamlit's fixed header clips the title — 3.2rem clears it. */
   .block-container { padding-top: 3.2rem; padding-bottom: 3rem; max-width: 100%; }
 
   /* Video cleanliness: nothing on screen that is not the product. The Deploy button
@@ -263,40 +288,75 @@ CSS = """
   [data-testid="stDecoration"],
   [data-testid="stAppDeployButton"] { display: none !important; }
 
-  /* --- hierarchy (Task 13, problem 7) ------------------------------------- */
+  /* --- the base scale ----------------------------------------------------- */
+  [data-testid="stAppViewContainer"],
+  [data-testid="stSidebarContent"] { font-size: 1.06rem; }
+
+  [data-testid="stMarkdownContainer"] p,
+  [data-testid="stMarkdownContainer"] li { font-size: 1.05rem; line-height: 1.6; }
+  [data-testid="stCaptionContainer"] p { font-size: 1rem; line-height: 1.55; opacity: .78; }
+  [data-testid="stAlertContainer"] p,
+  [data-testid="stNotificationContentSuccess"] p,
+  [data-testid="stNotificationContentInfo"] p,
+  [data-testid="stNotificationContentWarning"] p,
+  [data-testid="stNotificationContentError"] p { font-size: 1.04rem; line-height: 1.6; }
+
+  /* --- hierarchy (Task 13 problem 7, resized in Task 15) ------------------ */
   /* The header metrics are the loudest thing on the page, and they are cards rather
-     than four numbers floating in the background. */
+     than four numbers floating in the background. `gap` on the column set does the
+     separating; the padding here is what stops them reading as one long strip. */
   [data-testid="stMetric"] {
       background: rgba(255, 255, 255, .035);
       border: 1px solid rgba(255, 255, 255, .09);
-      border-radius: 10px;
-      padding: .7rem .85rem .55rem .85rem;
+      border-radius: 12px;
+      padding: .85rem 1rem .7rem 1rem;
+      height: 100%;
   }
   div[data-testid="stMetricValue"] {
-      font-size: 1.9rem;
+      font-size: 2.25rem;
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
       line-height: 1.15;
   }
   div[data-testid="stMetricLabel"] p {
-      font-size: .82rem; letter-spacing: .06em; text-transform: uppercase; opacity: .72;
+      font-size: 1rem; letter-spacing: .05em; text-transform: uppercase; opacity: .78;
+      font-weight: 600;
   }
-  div[data-testid="stMetricDelta"] { font-size: .8rem; }
+  /* The delta is a whole clause ("1.40x vs PyTorch compiler", "no server"), and at this
+     size it no longer fits one line inside a quarter-width card. It wraps rather than
+     being truncated with an ellipsis — a clipped delta is a number nobody can read, and
+     shortening the sentence to fit would be the wrong trade. `height: 100%` above keeps
+     the four cards level when one of them takes two lines. */
+  div[data-testid="stMetricDelta"] { font-size: .95rem; line-height: 1.35; }
+  /* The `*` is load-bearing: Streamlit puts the ellipsis on an inner node, so a rule
+     on the container alone left "1.40x vs PyTorch ..." on screen. */
+  div[data-testid="stMetricDelta"],
+  div[data-testid="stMetricDelta"] * {
+      white-space: normal !important;
+      overflow: visible !important;
+      text-overflow: clip !important;
+  }
+  div[data-testid="stMetricDelta"] svg { width: 1.1rem; height: 1.1rem; }
 
-  /* Section headings: quiet, so they organize without competing with the numbers. */
-  h5 { font-size: .84rem !important; letter-spacing: .1em; text-transform: uppercase;
-       opacity: .55; margin: .2rem 0 .55rem 0 !important; font-weight: 600; }
+  /* Section headings — "Who is working", "What is happening", "How much faster",
+     "Try the model". Task 15 problem 2: these were .84rem uppercase and read as
+     labels on a form. They are the page's four rooms, so they are sized like it. */
+  h5 { font-size: 1.4rem !important; font-weight: 700 !important; letter-spacing: -.005em;
+       text-transform: none; opacity: .95; margin: .1rem 0 .9rem 0 !important;
+       line-height: 1.3; }
+  h4 { font-size: 1.5rem !important; font-weight: 700 !important; }
 
   /* --- the timeline ------------------------------------------------------- */
   /* st.status labels are the timeline's headlines — they carry the demo. */
   details[data-testid="stExpander"] summary p,
-  div[data-testid="stExpander"] summary p { font-size: 1.06rem; font-weight: 600; }
+  div[data-testid="stExpander"] summary p { font-size: 1.18rem; font-weight: 600;
+                                            line-height: 1.45; }
 
   /* One step = one card, with room to breathe. Streamlit renders st.status as an
      expander, so this is what stops the timeline reading as one long grey wall. */
   div[data-testid="stExpander"] {
       border-radius: 10px;
       border-color: rgba(255, 255, 255, .10) !important;
-      margin-bottom: .5rem;
+      margin-bottom: .6rem;
       background: rgba(255, 255, 255, .02);
   }
   /* ... except the folds NESTED inside a step ("Show the exact data behind this"),
@@ -306,44 +366,56 @@ CSS = """
       border-color: rgba(255, 255, 255, .07) !important;
   }
   div[data-testid="stExpander"] div[data-testid="stExpander"] summary p {
-      font-size: .84rem; font-weight: 500; opacity: .65; text-transform: none;
+      font-size: .95rem; font-weight: 500; opacity: .7; text-transform: none;
   }
 
-  .ks-title { font-size: 2.3rem; font-weight: 700; line-height: 1.1; margin: 0;
-              letter-spacing: -.01em; }
-  .ks-sub   { font-size: .97rem; opacity: .68; margin: .3rem 0 0 0; line-height: 1.5;
-              max-width: 62ch; }
+  /* `!important` on these two, and only these two: they are <p> elements inside a
+     stMarkdownContainer, so the base rule above out-specifies a bare class selector
+     (0,1,1 beats 0,1,0) and silently rendered the page's title at body size. Everything
+     else with a ks- class is a <div>, which that rule does not match. */
+  .ks-title { font-size: 2.7rem !important; font-weight: 800; line-height: 1.08;
+              margin: 0; letter-spacing: -.02em; }
+  .ks-sub   { font-size: 1.1rem !important; opacity: .74; margin: .45rem 0 0 0;
+              line-height: 1.5; max-width: 62ch; }
   .ks-agent { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-              font-weight: 700; }
+              font-weight: 700; font-size: 1.1rem; }
   .ks-elapsed { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-                opacity: .6; font-size: .9rem; }
+                opacity: .6; font-size: 1rem; }
+
+  /* The one line of orientation under the header is help text, not a heading
+     (Task 15 problem 5): smaller and dimmer than everything it introduces. */
+  .ks-orient { font-size: .95rem; opacity: .5; line-height: 1.5; margin: 0 0 .2rem 0;
+               max-width: 96ch; }
 
   /* The narration between two agent turns. Indented and rule-marked so it reads as
      the dashboard talking, not as something an agent said. */
-  .ks-narrative { border-left: 3px solid #3b82f6; padding: .15rem 0 .15rem .8rem;
-                  margin: .1rem 0 1.1rem .2rem; font-size: .93rem; opacity: .8;
-                  line-height: 1.5; }
+  .ks-narrative { border-left: 3px solid #3b82f6; padding: .2rem 0 .2rem .9rem;
+                  margin: .15rem 0 1.25rem .2rem; font-size: 1.05rem; opacity: .84;
+                  line-height: 1.6; }
   /* Plain-English detail under an event headline. */
-  .ks-detail { font-size: .93rem; opacity: .8; line-height: 1.55;
-               margin: .15rem 0 .55rem 0; }
+  .ks-detail { font-size: 1.05rem; opacity: .85; line-height: 1.65;
+               margin: .2rem 0 .6rem 0; }
 
-  /* --- vertical rhythm (Task 14, problem 3) ------------------------------- */
+  /* --- vertical rhythm (Task 14 problem 3, Task 15 problem 5) ------------- */
   /* A spacer element, used where a divider would be too loud. */
-  .ks-gap { height: 1.6rem; }
+  .ks-gap { height: 1.8rem; }
   /* Sections breathe: the chart is not pressed against the map above it, and the chat
-     panel is not pressed against the timeline. */
-  hr[data-testid="stDivider"] { margin: 1.9rem 0 1.7rem 0; }
-  [data-testid="stVerticalBlockBorderWrapper"] { border-radius: 10px; }
+     panel is not pressed against the header. */
+  hr[data-testid="stDivider"] { margin: 2rem 0 1.8rem 0; }
+  [data-testid="stVerticalBlockBorderWrapper"] { border-radius: 12px; }
 
   /* --- try-the-model panel ------------------------------------------------ */
-  /* Preset prompts must look like buttons on a dark background, not flat text. */
+  /* Preset prompts must look like buttons on a dark background, not flat text, and
+     be big enough to hit without aiming (Task 15 problem 5). */
   [data-testid="stButton"] button {
       border: 1px solid rgba(255, 255, 255, .16);
       background: rgba(255, 255, 255, .04);
-      padding: .55rem .8rem;
-      font-size: .95rem;
+      padding: .7rem 1rem;
+      min-height: 2.9rem;
+      font-size: 1.05rem;
       transition: border-color .12s ease, background .12s ease;
   }
+  [data-testid="stButton"] button p { font-size: 1.05rem; font-weight: 600; }
   [data-testid="stButton"] button:hover {
       border-color: rgba(245, 158, 11, .55);
       background: rgba(245, 158, 11, .10);
@@ -354,26 +426,48 @@ CSS = """
   [data-testid="stFormSubmitButton"] button {
       border-color: transparent;
   }
+  [data-testid="stTextInput"] input { font-size: 1.05rem; padding: .6rem .8rem; }
+
+  /* The chat panel is a section of the page, not a step in the timeline, so its
+     fold reads at heading size. Keyed container -> `st-key-` class (Streamlit
+     1.62); if that ever stops being emitted the panel simply reads at the normal
+     expander size, which is why nothing else depends on it. */
+  .st-key-ks-chat div[data-testid="stExpander"] summary p {
+      font-size: 1.4rem; font-weight: 700;
+  }
+  .st-key-ks-chat div[data-testid="stExpander"] {
+      background: rgba(255, 255, 255, .028);
+      border-color: rgba(255, 255, 255, .13) !important;
+  }
   /* The model's answer: its own region, readable at a distance, wrapping long output. */
   .ks-answer {
-      margin: .55rem 0 .15rem 0;
-      padding: .75rem .9rem;
+      margin: .6rem 0 .2rem 0;
+      padding: .85rem 1rem;
       background: rgba(255, 255, 255, .045);
       border-left: 3px solid #10b981;
       border-radius: 6px;
-      font-size: 1rem;
-      line-height: 1.6;
+      font-size: 1.08rem;
+      line-height: 1.65;
       white-space: pre-wrap;
       overflow-wrap: anywhere;
   }
 
+  /* --- sidebar ------------------------------------------------------------ */
+  section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
+  section[data-testid="stSidebar"] label p { font-size: 1rem; line-height: 1.55; }
+  section[data-testid="stSidebar"] [data-testid="stCaptionContainer"] p {
+      font-size: .95rem; line-height: 1.5;
+  }
+  section[data-testid="stSidebar"] h3 { font-size: 1.6rem !important; font-weight: 800; }
+  section[data-testid="stSidebar"] h5 { font-size: 1.1rem !important; }
+
   code, pre, .stCode { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .stCode code, pre code { font-size: .98rem; line-height: 1.55; }
   /* Inline code inside a plain-English sentence should not shout. */
   .ks-detail code, .ks-narrative code {
       background: rgba(255, 255, 255, .07); padding: .05rem .3rem; border-radius: 4px;
-      font-size: .88em; color: #e5e7eb;
+      font-size: .9em; color: #e5e7eb;
   }
-  [data-testid="stCaptionContainer"] p { line-height: 1.55; }
 </style>
 """
 
@@ -403,12 +497,19 @@ def build_agent_graph(active: str | None = None) -> str:
         "digraph {",
         "  rankdir=TB",
         '  bgcolor="transparent"',
-        "  nodesep=0.45",
-        "  ranksep=0.55",
+        "  nodesep=0.18",
+        "  ranksep=0.40",
+        # Task 15, problem 3: at 12/10pt in a quarter-width column the node labels
+        # rendered to about 9px in a 1080p capture — legible on the machine that drew
+        # the SVG, not in the recording. The column is wider now and the type is sized
+        # for it. The margins and `nodesep` come DOWN as the type goes up, and that
+        # is the part that actually makes the labels bigger on screen: Streamlit fits
+        # the SVG to the column, so what matters is the type's size relative to the
+        # diagram's natural width, not its size in points.
         '  node [shape=box, style="rounded,filled", fontname="Helvetica,Arial,sans-serif",'
-        ' fontsize=12, margin="0.22,0.14", penwidth=0]',
-        '  edge [fontname="Helvetica,Arial,sans-serif", fontsize=10, color="#6b7280",'
-        ' fontcolor="#9ca3af", arrowsize=0.8, penwidth=1.1]',
+        ' fontsize=20, margin="0.14,0.12", penwidth=0]',
+        '  edge [fontname="Helvetica,Arial,sans-serif", fontsize=16, color="#6b7280",'
+        ' fontcolor="#9ca3af", arrowsize=1.0, penwidth=1.6]',
     ]
     for name, shape, label in GRAPH_NODES:
         lines.append(_node_line(name, shape, label, active))
@@ -1825,26 +1926,41 @@ def render_summary_card(target: Any, text: str, metrics: dict[str, Any]) -> None
 # --------------------------------------------------------------------------- #
 
 
-def render_chat_panel(target: Any) -> None:
+def chat_tokens() -> int:
+    """How many tokens the next request asks for — the sidebar slider, or the default.
+
+    Read through `session_state` rather than passed down, because the slider lives in the
+    sidebar (rendered before the page) and the panel lives in the page. Replay mode never
+    creates the widget, so Streamlit drops the key and the default stands.
+    """
+    value = st.session_state.get("chat_max_tokens")
+    return int(value) if isinstance(value, (int, float)) and value > 0 else CHAT_MAX_TOKENS
+
+
+def render_chat_panel(target: Any, *, expanded: bool = True) -> None:
     """Send prompts to the live server and show what came back, and how fast.
 
     This is what makes the Tokens/s card mean anything during a demo: the server's meter
-    only moves when somebody asks the model for something, and until now nobody did.
+    only moves when somebody asks the model for something, and until Task 14 nobody did.
 
     Live mode only — replaying a recording cannot generate text, and a panel that looked
     live while replaying would be the most misleading thing on the page.
+
+    Task 15, problem 4: the panel is now the second thing on the page rather than the
+    last, and it folds. `expanded` is False exactly while the agent tree is working, so
+    the timeline is what a viewer sees during a run and the panel is one click away
+    before and after it — which is when the demo actually uses it.
     """
     state = st.session_state
-    box = target.container()
-    box.markdown("#### 💬 Try the model")
-    box.caption(
+    fold = target.expander("💬 Try the model", expanded=expanded)
+    fold.caption(
         "Send a prompt to the Qwen2.5-1.5B server this system is optimizing. Send one "
         "before the swap and one after it to feel the difference — and to see that the "
         "answers stay coherent, which is the half of the claim a speedup cannot prove."
     )
 
     if not inference_server_is_up():
-        box.info(
+        fold.info(
             "**No inference server is running on this machine.** Start it with "
             "`make serve-inference` (it needs the GPU and about 3 GB of VRAM), then "
             "reload this page. Everything else on the dashboard works without it."
@@ -1856,7 +1972,7 @@ def render_chat_panel(target: Any) -> None:
     presets = list(PRESET_PROMPTS)
     for start in range(0, len(presets), PRESETS_PER_ROW):
         row = presets[start : start + PRESETS_PER_ROW]
-        columns = box.columns(PRESETS_PER_ROW, gap="medium")
+        columns = fold.columns(PRESETS_PER_ROW, gap="medium")
         for column, (label, prompt) in zip(columns, row, strict=False):
             if column.button(label, key=f"preset-{start}-{label}", width="stretch"):
                 pending = prompt
@@ -1866,7 +1982,7 @@ def render_chat_panel(target: Any) -> None:
     # "Start Run" button is created on the next run, and refuses it with "st.button()
     # can't be used in an st.form()". A plain input plus a button has no such coupling,
     # and `st.text_input` only reruns on Enter or blur, not per keystroke. ---
-    text_column, send_column = box.columns([5, 1], gap="small")
+    text_column, send_column = fold.columns([5, 1], gap="small")
     typed = text_column.text_input(
         "Your prompt",
         key="chat_prompt",
@@ -1877,10 +1993,10 @@ def render_chat_panel(target: Any) -> None:
         pending = typed.strip()
 
     if pending:
-        with box.status(f"Asking the model — “{_truncate_line(pending, 60)}”", expanded=False):
-            record_chat(send_prompt(pending))
+        with fold.status(f"Asking the model — “{_truncate_line(pending, 60)}”", expanded=False):
+            record_chat(send_prompt(pending, max_tokens=chat_tokens()))
 
-    render_chat_history(box, list(state.get("chat_history") or []))
+    render_chat_history(fold, list(state.get("chat_history") or []))
 
 
 def render_chat_history(target: Any, history: list[dict[str, Any]]) -> None:
@@ -1930,7 +2046,7 @@ def _chat_meta(record: dict[str, Any]) -> str:
 
 
 def _chat_timing(record: dict[str, Any]) -> str:
-    """ "Generated 48 tokens in 2.1 s — 22.9 tokens/s", from the server's own numbers."""
+    """ "Generated 128 tokens in 5.6 s — 22.9 tokens/s", from the server's own numbers."""
     tokens = record.get("tokens") or 0
     seconds = _as_float(record.get("time_ms")) / 1000.0
     rate = record.get("tokens_per_s")
@@ -2029,15 +2145,27 @@ def build_page_skeleton() -> PageSlots:
     The chat region (Task 14) is part of the skeleton even in Replay mode, where it stays
     empty: a section that exists in some runs and not others is what caused the duplicate
     metrics row this skeleton was introduced to fix.
+
+    Task 15 moved two things without changing that sequence's *shape*:
+
+    - **the chat panel is now second, right under the metrics**, not last. It was below
+      the whole optimization log, and the demo flow needs it first: ask the model
+      something to establish the baseline rate, *then* start the run, then ask again. A
+      panel a judge has to scroll past a finished run to find is a panel nobody presses
+      before the run, and the Tokens/s card then has nothing to compare against.
+    - **the map gets a third of the width instead of a quarter.** The step log carries
+      sentences and still gets the larger share, but at `[1, 2.45]` the diagram rendered
+      too small to read the node labels on a recording — and it is the architecture
+      story, not decoration.
     """
     header = st.empty()
-    st.caption(ORIENTATION)
+    st.markdown("<div class='ks-gap'></div>", unsafe_allow_html=True)
+    chat = st.container(key="ks-chat")
     st.divider()
     notice = st.empty()
+    st.markdown(f"<div class='ks-orient'>{ORIENTATION}</div>", unsafe_allow_html=True)
 
-    # The map is a diagram and reads fine small; the step log carries sentences and gets
-    # the room. `gap="large"` is what stops the two columns touching at 1080p.
-    left, right = st.columns([1, 2.45], gap="large")
+    left, right = st.columns([1, 1.55], gap="large")
     with left:
         st.markdown("##### Who is working")
         graph = st.empty()
@@ -2050,7 +2178,6 @@ def build_page_skeleton() -> PageSlots:
 
     st.divider()
     banners = st.container()
-    chat = st.container()
     return PageSlots(
         header=header,
         notice=notice,
@@ -2073,7 +2200,7 @@ ORIENTATION = (
 def render_header(metrics: dict[str, Any], target: Any = None) -> None:
     """Title on the left, four metric cards on the right. Into `target` if given."""
     container = target if target is not None else st
-    title, cards = container.columns([1.35, 2])
+    title, cards = container.columns([1.2, 2.2], gap="large")
     with title:
         st.markdown(
             '<p class="ks-title">gpuyantra</p>'
@@ -2082,7 +2209,9 @@ def render_header(metrics: dict[str, Any], target: Any = None) -> None:
             unsafe_allow_html=True,
         )
     with cards:
-        speed, reward, iteration, tokens = cards.columns(4)
+        # `gap="medium"` (Task 15, problem 5): four equal cards with air between them,
+        # rather than four numbers in one strip.
+        speed, reward, iteration, tokens = cards.columns(4, gap="medium")
         speedup = metrics.get("speedup")
         compile_ = metrics.get("speedup_vs_compile")
         speed.metric(
@@ -2289,11 +2418,24 @@ def render_speedup_chart(target: Any, metrics: dict[str, Any]) -> None:
 
         frame = pd.DataFrame(rows, columns=["what", "times"])
         order = [label for label, _ in rows]
+        # Task 15, problem 5: 11px Vega defaults inside a quarter-width column were the
+        # smallest type on the page. Sized to match the rest of it.
         base = alt.Chart(frame).encode(
-            x=alt.X("times:Q", title="× faster than PyTorch", axis=alt.Axis(grid=False)),
-            y=alt.Y("what:N", sort=order, title=None),
+            x=alt.X(
+                "times:Q",
+                title="× faster than PyTorch",
+                axis=alt.Axis(grid=False, labelFontSize=14, titleFontSize=14),
+            ),
+            # labelLimit=0: "PyTorch compiler" is longer than Vega's 180px default at this
+            # size and came back as "PyTorch com…".
+            y=alt.Y(
+                "what:N",
+                sort=order,
+                title=None,
+                axis=alt.Axis(labelFontSize=15, labelLimit=0),
+            ),
         )
-        bars = base.mark_bar(cornerRadiusEnd=4, height=26).encode(
+        bars = base.mark_bar(cornerRadiusEnd=4, height=36).encode(
             color=alt.Color(
                 "what:N",
                 scale=alt.Scale(domain=order, range=list(CHART_COLORS[: len(order)])),
@@ -2304,12 +2446,12 @@ def render_speedup_chart(target: Any, metrics: dict[str, Any]) -> None:
                 alt.Tooltip("times:Q", title="× faster", format=".2f"),
             ],
         )
-        labels = base.mark_text(align="left", dx=6, color="#e5e7eb", fontSize=13).encode(
-            text=alt.Text("times:Q", format=".2f")
-        )
-        body.altair_chart((bars + labels).properties(height=len(rows) * 46), width="stretch")
+        labels = base.mark_text(
+            align="left", dx=8, color="#e5e7eb", fontSize=16, fontWeight="bold"
+        ).encode(text=alt.Text("times:Q", format=".2f"))
+        body.altair_chart((bars + labels).properties(height=len(rows) * 62), width="stretch")
     except Exception:  # noqa: BLE001 — a charting library must never break the demo
-        body.bar_chart({label: [value] for label, value in rows}, height=180, width="stretch")
+        body.bar_chart({label: [value] for label, value in rows}, height=220, width="stretch")
     body.caption(
         "Both comparisons come from the same timed run. The middle bar is PyTorch's own "
         "compiler, measured against the same baseline — beating only plain PyTorch would "
@@ -2683,6 +2825,9 @@ def render_live() -> None:
     slots = build_page_skeleton()
 
     render_header(metrics, slots.header.container())
+    # Second on the page, and open unless the agents are mid-run (Task 15, problem 4).
+    working = bool(consumer.is_running or state.get("awaiting_followup"))
+    render_chat_panel(slots.chat, expanded=not working)
     render_graph(
         slots,
         state["active_agent"] if consumer.is_running else None,
@@ -2697,18 +2842,17 @@ def render_live() -> None:
         )
     render_timeline(slots.timeline, state["timeline_events"], running=consumer.is_running)
 
-    # One slot, two kinds of news: an error is a warning, a trace path is a footnote.
-    # Both go in the same place so neither shifts the layout when it appears.
+    # Errors only. The trace path used to share this slot, where a file path was the
+    # most prominent sentence on a page whose subject is a GPU (Task 15, problem 5); it
+    # is now a caption in the sidebar, next to the button that starts the recording.
     if state["run_error"]:
         slots.notice.warning(state["run_error"])
-    elif state["trace_path"]:
-        slots.notice.caption(f"Recording this run to `{state['trace_path']}`")
+    else:
+        slots.notice.empty()
 
     with slots.banners:
         render_banners(metrics)
         maybe_celebrate(metrics)
-
-    render_chat_panel(slots.chat)
 
     # NOT unconditional. `st_autorefresh` reruns the whole script, and a rerun landing
     # while a `/generate` request is in flight kills the script that is waiting for it —
@@ -2923,10 +3067,33 @@ def render_sidebar() -> dict[str, Any]:
 
         controls["op_name"] = op_name
         controls["hidden_size"] = int(hidden_size)
+
+        # Task 15, problem 1. Every answer used to be exactly 48 tokens because that is
+        # what this dashboard asked for — the server's own default is 128. The slider
+        # makes the length the operator's choice; the panel reads it via `chat_tokens`.
+        st.sidebar.markdown("##### Try the model")
+        st.sidebar.slider(
+            "Response length",
+            min_value=CHAT_TOKENS_MIN,
+            max_value=CHAT_TOKENS_MAX,
+            value=CHAT_MAX_TOKENS,
+            step=CHAT_TOKENS_STEP,
+            key="chat_max_tokens",
+            help=(
+                "How many words-worth the model is allowed to write before it is cut "
+                "off. 128 gives two or three finished sentences. Longer answers take "
+                "proportionally longer — the throughput number does not change with it."
+            ),
+        )
+
         st.sidebar.divider()
         if st.sidebar.button("▶ Start Run", type="primary", width="stretch"):
             start_run(op_name, int(hidden_size))
-        st.sidebar.caption(f"Trace → `{DEFAULT_TRACE_DIR}/`")
+        # The trace path is developer detail, so it lives here rather than on the page.
+        trace_path = str(st.session_state.get("trace_path") or "")
+        st.sidebar.caption(
+            f"Recording → `{trace_path}`" if trace_path else f"Traces → `{DEFAULT_TRACE_DIR}/`"
+        )
     else:
         traces = ordered_traces()
         if traces:

@@ -1476,3 +1476,55 @@ ResNet-50 is an audit target, not an optimization target), and ResNet-50's width
 *Source: Task 14, 2026-08-31. Gates: 702 tests pass (31 new, against a stub inference
 server on an ephemeral port), `make lint` clean, a launch logs zero deprecation warnings,
 and the slim container still resolves the dropdowns with no torch installed.*
+
+---
+
+## Task 15 — the chat panel asked for 48 tokens, and the type scale was a developer's
+
+Presentation only. No agent, verifier, memory or server code was touched, and no number
+on screen changed — this is entirely about size, position and spacing.
+
+**"Every response is exactly 48 tokens" was this dashboard's own request.** `CHAT_MAX_TOKENS`
+was 48, so the server cut every reply off at 48 — it looked like a broken model and was a
+hardcoded ask. It is now **128**, which is `GenerateRequest.max_tokens`'s own default in
+`inference_server/server.py` (declared `ge=1, le=2048`), plus a **Response length** slider
+in the Live sidebar (32–512, read by `chat_tokens()` through `session_state`). The ceiling
+is far below the server's 2048 deliberately: generation is synchronous and holds the swap
+lock, so a 2048-token request would stall the demo and block a hot-swap behind it.
+`test_the_server_still_accepts_the_range_the_slider_offers` reads the bound out of
+`server.py` itself, so narrowing it there fails here rather than at the demo.
+
+**The one CSS trap worth recording.** The base rule
+`[data-testid="stMarkdownContainer"] p { font-size: 1.05rem }` out-specifies a bare class
+selector (0,1,1 beats 0,1,0), so `.ks-title { font-size: 2.7rem }` rendered the page's
+title at body size — visible only in a browser, since `AppTest` measures nothing. The two
+ks- classes that are `<p>` elements (`.ks-title`, `.ks-sub`) carry `!important`; the rest
+are `<div>`s, which that rule does not match. The metric *delta* had the same shape of
+problem from the other direction: Streamlit puts the ellipsis on an inner node, so
+`white-space: normal` on `[data-testid="stMetricDelta"]` alone still showed
+"1.40× vs PyTorch …" — it needs the `*` descendant too. The delta wraps rather than being
+shortened: a clipped number is worse than a two-line card.
+
+**Making the agent map's labels bigger is not done by raising `fontsize`.** Streamlit fits
+the SVG to the column, so what reaches the eye is the type's size *relative to the
+diagram's natural width* — raising `fontsize` alone widens the nodes by the same factor
+and changes nothing. The gain comes from the fixed-inch quantities: node `margin`,
+`nodesep` and `ranksep` come DOWN as the points go up. Combined with the column split
+moving from `[1, 2.45]` to `[1, 1.55]`, that is the whole of problem 3.
+
+**The chat panel is second on the page now, not last.** The demo flow is ask → run → ask
+again, and a panel below a finished optimization log is one nobody presses *before* the
+run — which leaves the Tokens/s card with nothing to compare against. It is an
+`st.expander` in a keyed container (`st.container(key="ks-chat")` → the `st-key-ks-chat`
+class Streamlit 1.62 emits, which is what lets its summary be styled at heading size), and
+it folds shut exactly while the agents are working. Replay mode fills the same slot with
+nothing, so the top-level element sequence is still identical in both modes — the Task 13
+skeleton rule is unchanged and still asserted.
+
+The trace path moved from the page to a sidebar caption: it was a file path rendered as
+the most prominent sentence under the header.
+
+*Source: Task 15, 2026-08-31. Gates: 697 unit tests pass (13 new) + 18 integration
+unchanged, `make lint` clean, a launch logs no deprecation warnings, and both modes were
+photographed in headless Chrome at 1920×1080 with zero console errors — idle, mid-replay,
+after a replay, and with a preset prompt answered by a stub server.*

@@ -1218,3 +1218,106 @@ def test_the_speedup_chart_reaches_the_page_after_a_replay(app):
 
 def test_there_is_no_chart_on_the_page_before_anything_is_measured(app):
     assert app.get("vega_lite_chart") == []
+
+
+# --------------------------------------------------------------------------- #
+# Task 15 — layout and type scale
+#
+# These assert against the source and the CSS constant rather than against pixels,
+# because nothing in `AppTest` measures a rendered font. That is a real limit: they
+# catch a size being *dropped*, not a page that looks wrong. The visual check is the
+# gate in the task, not something a test can stand in for.
+# --------------------------------------------------------------------------- #
+
+
+def _skeleton_source() -> str:
+    import inspect
+
+    from kernelsmith.ui.demo_dashboard import build_page_skeleton
+
+    return inspect.getsource(build_page_skeleton)
+
+
+def _css() -> str:
+    from kernelsmith.ui.demo_dashboard import CSS
+
+    return CSS
+
+
+def _font_size(selector_fragment: str) -> float:
+    """The `font-size`, in rem, of the first rule whose selector contains the fragment.
+
+    Deliberately crude: the point is to notice a size that was tuned back down to
+    Streamlit's default, not to reimplement a CSS parser.
+    """
+    css = _css()
+    index = css.index(selector_fragment)
+    block = css[css.index("{", index) : css.index("}", index)]
+    match = re.search(r"font-size:\s*([\d.]+)rem", block)
+    assert match, f"no font-size on the rule for {selector_fragment!r}"
+    return float(match.group(1))
+
+
+def test_the_chat_panel_sits_above_the_timeline_not_below_it():
+    """Problem 4: the demo flow is chat → run → chat, so the panel cannot be last.
+
+    Asserted on the skeleton's source because position in the element tree is exactly
+    what `AppTest` flattens away.
+    """
+    source = _skeleton_source()
+    assert source.index('chat = st.container(key="ks-chat")') < source.index(
+        "left, right = st.columns"
+    )
+    assert source.index('chat = st.container(key="ks-chat")') < source.index(
+        "timeline = st.container()"
+    )
+
+
+def test_the_agent_map_gets_a_readable_share_of_the_width():
+    """Problem 3: at [1, 2.45] the node labels were unreadable in a 1080p capture."""
+    match = re.search(r"st\.columns\(\[1, ([\d.]+)\], gap=\"large\"\)", _skeleton_source())
+    assert match, "the two-column split moved or changed shape"
+    assert 1.0 / (1.0 + float(match.group(1))) >= 0.35
+
+
+def test_the_agent_map_labels_are_sized_for_a_recording():
+    dot = build_agent_graph()
+    node_size = int(re.search(r"node \[.*?fontsize=(\d+)", dot, re.S).group(1))
+    edge_size = int(re.search(r"edge \[.*?fontsize=(\d+)", dot, re.S).group(1))
+    assert node_size >= 15 and edge_size >= 12
+
+
+def test_the_type_scale_is_big_enough_to_read_at_1080p():
+    """Problem 2, one assertion per size the task names."""
+    assert _font_size(".ks-title") >= 2.0  # the page header
+    assert _font_size("h5 {") >= 1.4  # section headings
+    assert _font_size('div[data-testid="stMetricValue"]') >= 1.9  # the numbers stay loud
+    assert _font_size('div[data-testid="stMetricLabel"] p') >= 1.0
+    assert _font_size("summary p,") >= 1.1  # event headlines in the step log
+    assert _font_size(".ks-detail {") >= 1.0  # event detail
+    assert _font_size(".ks-narrative {") >= 1.0  # the notes between steps
+    assert _font_size(".ks-answer {") >= 1.0  # what the model said
+    assert _font_size('[data-testid="stCaptionContainer"] p') >= 1.0
+
+
+def test_the_event_detail_has_room_to_breathe():
+    """A line-height under 1.5 is what made the detail text a wall at this size."""
+    block = _css()[_css().index(".ks-detail {") :]
+    assert float(re.search(r"line-height:\s*([\d.]+)", block).group(1)) >= 1.5
+
+
+def test_the_orientation_line_is_help_text_not_a_heading():
+    """Problem 5: it introduces the timeline, so it must be quieter than the timeline."""
+    assert _font_size(".ks-orient") < _font_size(".ks-detail {")
+    block = _css()[_css().index(".ks-orient") :]
+    assert float(re.search(r"opacity:\s*([\d.]+)", block).group(1)) <= 0.6
+
+
+def test_the_trace_path_is_a_sidebar_footnote_not_a_page_element():
+    """Problem 5: a file path was the most prominent sentence under the header."""
+    import inspect
+
+    from kernelsmith.ui.demo_dashboard import render_live, render_sidebar
+
+    assert "Recording this run to" not in inspect.getsource(render_live)
+    assert "Recording →" in inspect.getsource(render_sidebar)
