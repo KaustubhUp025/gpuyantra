@@ -1,0 +1,14 @@
+# gcloud falls back to .gitignore when this file is absent — and .gitignore excludes
+# `data/traces/*.jsonl`, which are FORCE-ADDED to git but invisible to a pattern match.
+# A `gcloud run deploy --source` therefore shipped a dashboard containing only the
+# hand-written fixture, so a judge replayed assembled structure instead of a real L4
+# capture. This file exists to stop that: the traces ARE the deployed artifact.
+.git/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+dist/
+*.egg-info/
+.env

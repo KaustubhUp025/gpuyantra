@@ -526,12 +526,15 @@ const VERIFICATION = [
  */
 const DASHBOARD_URL = "https://gpuyantra-dashboard-p6o5zbfooq-uc.a.run.app";
 const REPO_URL = "https://github.com/KaustubhUp025/gpuyantra";
+const VIDEO_URL = "https://youtu.be/7pGWpnfUGa8";
+const WRITEUP_URL =
+  "https://dev.to/thesilentone25/i-built-an-agent-that-optimizes-gpu-kernels-while-the-model-keeps-serving-267p";
 
 const LINKS = [
   { label: "Watch the agent run", href: DASHBOARD_URL },
   { label: "GitHub repository", href: REPO_URL },
-  { label: "Demo video", href: "#", todo: true },
-  { label: "Technical write-up", href: "#", todo: true },
+  { label: "Demo video", href: VIDEO_URL },
+  { label: "Technical write-up", href: WRITEUP_URL },
 ];
 
 const SECTIONS = [
@@ -897,6 +900,24 @@ function Hero() {
             style={{ borderColor: "var(--ks-accent)", color: "var(--ks-accent)" }}
           >
             Watch the agent run
+            <span aria-hidden="true">↗</span>
+          </a>
+          <a
+            href={VIDEO_URL}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-2 rounded-md border border-[color:var(--ks-border-hi)] bg-[color:var(--ks-raised)] px-4 py-2.5 font-mono text-[13px] text-[color:var(--ks-text)] transition-colors hover:border-[color:var(--ks-accent)]/50"
+          >
+            Demo video
+            <span aria-hidden="true">↗</span>
+          </a>
+          <a
+            href={WRITEUP_URL}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-2 rounded-md border border-[color:var(--ks-border-hi)] bg-[color:var(--ks-raised)] px-4 py-2.5 font-mono text-[13px] text-[color:var(--ks-text)] transition-colors hover:border-[color:var(--ks-accent)]/50"
+          >
+            Technical write-up
             <span aria-hidden="true">↗</span>
           </a>
         </div>

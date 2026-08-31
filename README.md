@@ -48,6 +48,8 @@ any one scores −1 and skips the rest, so nothing unverified reaches the served
 |---|---|
 | **Dashboard** | <https://gpuyantra-dashboard-p6o5zbfooq-uc.a.run.app> |
 | **Results explorer** | <https://gpuyantra-explorer-p6o5zbfooq-uc.a.run.app> |
+| **Demo video** | <https://youtu.be/7pGWpnfUGa8> |
+| **Technical write-up** | <https://dev.to/thesilentone25/i-built-an-agent-that-optimizes-gpu-kernels-while-the-model-keeps-serving-267p> |
 
 Both are Cloud Run services, deployed from `make deploy-dashboard` / `make deploy-explorer`.
 
