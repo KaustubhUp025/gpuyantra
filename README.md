@@ -169,7 +169,7 @@ verifier's verdict, never from the model's prose summary.
 ```bash
 make setup            # one-command setup (above)
 make demo             # full reproducible demo; DEMO_ARGS=--no-server to skip the server
-make test-unit        # unit tests (no GPU, no network) — 641 tests
+make test-unit        # unit tests (no GPU, no network) — 698 tests
 make test-int         # integration tests (GPU + live Vertex AI + Firestore)
 make test             # both
 make lint             # ruff check + format --check
@@ -207,7 +207,7 @@ One `make demo` on the L4 VM, server up, everything through the real agent tree:
 | bandit arm pulled | `rmsnorm_l4_single_pass_register_fused` |
 | hot-swap | **live — 57 `Qwen2RMSNorm` modules patched**, parity held, no rollback |
 | end-to-end `/generate` | 529 ms / 3 tokens before the swap → 87.5 ms / 2 tokens after, output coherent |
-| tests | 18 integration green on this L4 run; 641 unit tests green (the unit suite is hermetic and runs anywhere — the L4 session itself collected 572, before Tasks 12b and 13 added 69) |
+| tests | 18 integration green on this L4 run; the hermetic unit suite runs anywhere and collects **698** today (**716** total). That L4 session itself collected 572 — Tasks 12b, 13, 13b, 14 and 15 have added 126 since, none of which change any number above |
 
 The end-to-end line is two single requests, not a sustained throughput curve — quoted as
 exactly that. It is the first time the swap has been observed on the served model rather
