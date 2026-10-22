@@ -14,7 +14,7 @@ from typing import Any
 import torch
 import triton.testing
 
-from kernelsmith.config import DO_BENCH_REP, DO_BENCH_WARMUP
+from kernelsmith.config import COMPILE_BASELINE_MODES, DO_BENCH_REP, DO_BENCH_WARMUP
 
 
 def bench_kernel(
@@ -60,33 +60,45 @@ def _nondeterministic_for_timing() -> Iterator[None]:
 def measure_baselines(
     reference_fn: Callable[[torch.Tensor], torch.Tensor],
     x: torch.Tensor,
-) -> dict[str, float]:
+) -> dict[str, Any]:
     """Time the two honest baselines for `reference_fn` at input `x`.
 
     1. Eager + TF32 (`matmul_precision='high'`) — the KernelBench-Verified baseline.
        Timing against TF32-off eager would hand us a free ~2x on any matmul.
-    2. torch.compile(mode="reduce-overhead") — the bar for the +3 milestone.
+    2. torch.compile in every mode of `COMPILE_BASELINE_MODES`, keeping the FASTEST —
+       the bar for the +3 milestone. Neither mode wins everywhere: "reduce-overhead"
+       (CUDA graphs) helps launch-bound ops, but on the bandwidth-bound RMSNorm and
+       LayerNorm it measured 2-4x slower than "default". Timing only "reduce-overhead"
+       turned a kernel level with the compiler into a reported 2x win.
 
-    Both are timed with deterministic algorithms OFF, so the baselines are not
+    All are timed with deterministic algorithms OFF, so the baselines are not
     handicapped by a flag the Triton candidate never pays. See
     `_nondeterministic_for_timing`.
 
-    Returns {"eager_ms": float, "compile_ms": float}.
+    Returns {"eager_ms": float, "compile_ms": float, "compile_ms_by_mode": {mode: ms}}.
     """
     torch.set_float32_matmul_precision("high")
 
+    compile_ms_by_mode: dict[str, float] = {}
     with _nondeterministic_for_timing():
         eager_ms = bench_kernel(lambda: reference_fn(x))
 
-        compiled = torch.compile(reference_fn, mode="reduce-overhead")
-        # Warm the compile cache outside the timed region: the first call pays
-        # dynamo + inductor compilation, and CUDA graphs need a capture run.
-        for _ in range(3):
-            compiled(x)
-        torch.cuda.synchronize()
-        compile_ms = bench_kernel(lambda: compiled(x))
+        for mode in COMPILE_BASELINE_MODES:
+            # Fresh dynamo cache per mode, so one mode's graph is never timed as another's.
+            torch._dynamo.reset()
+            compiled = torch.compile(reference_fn, mode=mode)
+            # Warm the compile cache outside the timed region: the first call pays
+            # dynamo + inductor compilation, and CUDA graphs need a capture run.
+            for _ in range(3):
+                compiled(x)
+            torch.cuda.synchronize()
+            compile_ms_by_mode[mode] = bench_kernel(lambda compiled=compiled: compiled(x))
 
-    return {"eager_ms": eager_ms, "compile_ms": compile_ms}
+    return {
+        "eager_ms": eager_ms,
+        "compile_ms": min(compile_ms_by_mode.values()),
+        "compile_ms_by_mode": compile_ms_by_mode,
+    }
 
 
 def compute_speedups(

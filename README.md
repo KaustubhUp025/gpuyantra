@@ -199,11 +199,11 @@ One `make demo` on the L4 VM, server up, everything through the real agent tree:
 
 | | Measured |
 |---|---|
-| reward | **+3** (max) |
+| reward | **+3** (max) — under the old compile baseline; see [correction](#correction-2026-10-22-the-torchcompile-baseline) |
 | correctness | 15/15 — 5 seeds × 3 shapes, atol=rtol=1e-2 |
 | iterations | 1 of 6 (converged first try) |
 | speedup vs eager | **7.24×** |
-| speedup vs `torch.compile` | **1.39×** |
+| speedup vs `torch.compile` | **1.39×** — against `mode="reduce-overhead"` only, which is the *slower* compile mode for this op; see [correction](#correction-2026-10-22-the-torchcompile-baseline) |
 | latency, headline shape `16x2048` | 1.246 ms, against 9.021 ms eager |
 | latency, `1x128` / `8x512` | 0.0123 ms / 0.129 ms |
 | bandit arm pulled | `rmsnorm_l4_single_pass_register_fused` |
@@ -214,6 +214,34 @@ One `make demo` on the L4 VM, server up, everything through the real agent tree:
 The end-to-end line is two single requests, not a sustained throughput curve — quoted as
 exactly that. It is the first time the swap has been observed on the served model rather
 than only in its parts, which closes the one item this README used to list as open.
+
+### Correction (2026-10-22): the torch.compile baseline
+
+The 1.39× above is real arithmetic against the wrong opponent. `measure_baselines()` timed
+torch.compile in **`mode="reduce-overhead"` only**. CUDA graphs help launch-bound ops, but
+on a bandwidth-bound norm they are the *slow* mode: on the dev box (RTX A500), the RMSNorm
+reference compiles to **2.33 ms** in `mode="default"` and **4.60 ms** in `reduce-overhead`.
+Timing only the second made the kernel look faster than the compiler.
+
+The verifier now times both modes and compares against the faster one
+(`COMPILE_BASELINE_MODES` in `config.py`). Re-measured with that fix, the seed RMSNorm kernel
+(`scripts/seed_skill.py`) through `verify_kernel`, RTX A500, fp16, `16x2048`:
+
+| | Before the fix | After the fix |
+|---|---|---|
+| correctness | 15/15 | 15/15 |
+| speedup vs eager | 6.93× | 6.93× (unchanged) |
+| speedup vs `torch.compile` | 1.36× (vs `reduce-overhead`, 4.60 ms) | **0.69×** (vs `default`, 2.33 ms; kernel 3.37 ms) |
+| reward | +3 | **+2** |
+
+So the honest claim is: **the agent-written kernel beats eager PyTorch by ~7× and does not
+beat torch.compile.** The L4 has not been re-measured yet; the mode effect is a property of
+the op, not the card, so expect the same direction there. The rest of the project's claim —
+the agent writes its own deployment contract and the verifier checks it, then hot-swaps into
+a live server — does not depend on this number.
+
+A consequence for the agent loop: +3 is now genuinely hard for a norm, so the
+RefinementLoop will usually run more of its 6 iterations before escalating.
 
 The CUDA-mode audit of the served model, measured on the same card (`make audit`):
 `Qwen2RMSNorm` × 57 at 0.83 FLOP/byte and **23%** of the L4's 300 GB/s — 121× below the
@@ -232,7 +260,7 @@ The field has a credibility problem — Sakana's 3.13× became 1.49×, KernelBen
 |---|---|
 | RNGs | `seed_everything()`: `CUBLAS_WORKSPACE_CONFIG` first, then Python/NumPy/torch CPU + CUDA, then `use_deterministic_algorithms(True)` last |
 | The model | **`temperature=0` and a fixed decode seed on every agent** and on the Gemma explainer. Reseeding torch cannot make a *sampled* kernel come back the same |
-| Baselines | TF32 on (`set_float32_matmul_precision("high")`) for every baseline measurement; determinism turned off *only* around the timed comparison, because it costs eager ~23% while leaving Triton untouched |
+| Baselines | TF32 on (`set_float32_matmul_precision("high")`) for every baseline measurement; determinism turned off *only* around the timed comparison, because it costs eager ~23% while leaving Triton untouched; torch.compile timed in both `default` and `reduce-overhead` and the faster one used (since 2026-10-22) |
 | Versions | Every direct dependency `==`-pinned; the full 127-package closure pinned by the committed `uv.lock`, installed with `uv sync --frozen` |
 | Memory | `make export-firestore` before recording |
 
@@ -254,7 +282,8 @@ the model wandering.
 
 Those speedups are the **RTX A500's**, from a dev-box run without the inference server —
 they are a reproducibility measurement, not the headline. The L4 numbers are the ones in
-"Measured results" above (7.24× / 1.39×). Do not quote the two interchangeably.
+"Measured results" above (7.24× / 1.39×). Do not quote the two interchangeably. Both
+`torch.compile` columns predate the [baseline correction](#correction-2026-10-22-the-torchcompile-baseline).
 
 **The bandit arm differs by design.** Run 1 upserted the kernel it had just verified, and
 UCB1 gives an arm with zero pulls an unbounded exploration bonus — so run 2 was *supposed*

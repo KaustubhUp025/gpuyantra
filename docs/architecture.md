@@ -307,6 +307,7 @@ baselines under it manufactures a speedup out of a measurement artifact:
 | Deterministic flag ON (inflated) | 8.52× | — |
 | Deterministic flag OFF (fair) — Task 8, same L4 | 6.92× | 1.36× |
 | **Deterministic flag OFF — latest L4 run, 2026-08-30** | **7.24×** | **1.39×** |
+| Compile baseline = faster of `default`/`reduce-overhead` — RTX A500, 2026-10-22 (seed kernel) | 6.93× | **0.69×** |
 
 The two fair rows are two runs of the same code on the same card, five days apart, and
 the second is the one every other document quotes. The first is kept because it is what

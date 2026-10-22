@@ -35,6 +35,9 @@ RTOL = 1e-2
 DO_BENCH_WARMUP = 150  # Default 25 underestimates by ~30% (Triton issue #2306)
 DO_BENCH_REP = 200
 SPEEDUP_THRESHOLD = 0.05  # 5% gate for +2/+3 milestones
+# torch.compile baseline = the FASTER of these modes. "reduce-overhead" (CUDA graphs)
+# measured 2-4x slower than "default" on bandwidth-bound norms, so it alone flatters us.
+COMPILE_BASELINE_MODES = ("default", "reduce-overhead")
 SANDBOX_TIMEOUT_S = 60  # SIGKILL after this
 GPU_HEALTH_PROBE_TIMEOUT_S = 10
 

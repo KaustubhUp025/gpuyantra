@@ -1528,3 +1528,33 @@ the most prominent sentence under the header.
 unchanged, `make lint` clean, a launch logs no deprecation warnings, and both modes were
 photographed in headless Chrome at 1920×1080 with zero console errors — idle, mid-replay,
 after a replay, and with a preset prompt answered by a stub server.*
+
+---
+
+## The torch.compile baseline is the FASTER of `default` and `reduce-overhead` (overrides §5.2)
+
+Spec §5.2 says to compile the reference with `torch.compile(mode="reduce-overhead")`.
+That mode alone is a handicapped baseline for exactly the ops this project optimizes.
+CUDA graphs remove launch overhead, which helps launch-bound ops, but on a bandwidth-bound
+norm they are the slow mode. Measured on the dev box (RTX A500, fp16, RMSNorm `16x2048x1536`):
+`default` 2.33 ms, `reduce-overhead` 4.60 ms. A LayerNorm showed the same 2-4x gap.
+
+Every "vs torch.compile" number before this change was therefore measured against the
+slower mode. Re-run through `verify_kernel` with the fix, the seed RMSNorm kernel goes
+from **1.36x vs compile (+3) to 0.69x vs compile (+2)**; vs eager is unchanged at 6.93x.
+The historical L4 figures (1.36x Task 8, 1.39x on 2026-08-30) and the committed traces
+that carry them are left as recorded, and the README states the correction next to them.
+**The L4 has not been re-measured.**
+
+`measure_baselines()` now loops over `COMPILE_BASELINE_MODES` in `config.py`, resetting
+dynamo between modes, and returns `compile_ms` as the minimum plus `compile_ms_by_mode`
+so both measurements are visible in the verdict. If a mode fails to compile it raises, as
+the single-mode version did. `tests/test_timing.py` pins both modes and the min, including
+the launch-bound case where `reduce-overhead` IS the faster one.
+
+This tightens the verifier; it does not weaken it (red line #3). Its practical effect on
+the agent: +3 now requires really beating the compiler, so a norm run will usually use
+more of `max_iterations=6` before escalating.
+
+*Source: found while building a standalone verifier skill from this repo's lessons,
+2026-10-22. Measured on the RTX A500 dev box.*

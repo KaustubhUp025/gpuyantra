@@ -9,6 +9,9 @@ that fail silently — a wrong number, never an exception:
    torch.compile baselines ~23% while leaving a Triton candidate untouched, so the
    timed comparison runs with the flag off and restores it afterwards. With the flag
    left on we measured 8.52x vs eager; with it off, 6.9x. Only one of those is real.
+3. The torch.compile baseline is the faster of "default" and "reduce-overhead".
+   CUDA graphs are 2-4x SLOWER on bandwidth-bound norms, so timing that mode alone
+   reported a 2x win for a kernel that was level with the compiler.
 
 These run without a GPU: `measure_baselines` is exercised against stubbed
 `bench_kernel`/`torch.compile`, because what is under test is the flag discipline
@@ -85,8 +88,64 @@ def test_baselines_are_timed_without_deterministic_algorithms(monkeypatch):
 
     result = timing.measure_baselines(lambda x: x, torch.zeros(2))
 
-    assert observed == [False, False], "eager and torch.compile were timed under the flag"
-    assert result == {"eager_ms": 2.0, "compile_ms": 2.0}
+    assert observed == [False, False, False], "a baseline was timed under the flag"
+    assert result == {
+        "eager_ms": 2.0,
+        "compile_ms": 2.0,
+        "compile_ms_by_mode": {"default": 2.0, "reduce-overhead": 2.0},
+    }
+
+
+# --------------------------------------------------------------------------- #
+# torch.compile baseline: the fastest mode, never just one
+# --------------------------------------------------------------------------- #
+
+
+def _stub_per_mode(monkeypatch, ms_by_mode: dict[str, float], modes_seen: list[str]) -> None:
+    """torch.compile returns a callable tagged with its mode; bench reads the tag."""
+
+    def fake_compile(fn, mode=None):
+        modes_seen.append(mode)
+
+        def compiled(x):
+            return fn(x)
+
+        compiled.mode = mode
+        return compiled
+
+    def fake_bench_kernel(fn, warmup=DO_BENCH_WARMUP, rep=0):
+        mode = getattr(fn.__defaults__[0], "mode", None) if fn.__defaults__ else None
+        return ms_by_mode[mode] if mode else 10.0  # eager
+
+    monkeypatch.setattr(timing, "bench_kernel", fake_bench_kernel)
+    monkeypatch.setattr(timing.torch, "compile", fake_compile)
+    monkeypatch.setattr(timing.torch.cuda, "synchronize", lambda *a, **k: None)
+
+
+def test_every_compile_mode_is_timed():
+    """Dropping a mode is how a handicapped baseline gets back in."""
+    assert set(timing.COMPILE_BASELINE_MODES) == {"default", "reduce-overhead"}
+
+
+@pytest.mark.parametrize(
+    ("ms_by_mode", "expected"),
+    [
+        # Bandwidth-bound norm: CUDA graphs are the SLOW mode (measured 2-4x).
+        ({"default": 1.12, "reduce-overhead": 2.27}, 1.12),
+        # Launch-bound op: CUDA graphs win.
+        ({"default": 0.05, "reduce-overhead": 0.02}, 0.02),
+    ],
+)
+def test_the_compile_baseline_is_the_faster_mode(monkeypatch, ms_by_mode, expected):
+    """Comparing against the slower mode reported 2.0x for a kernel level with the compiler."""
+    modes_seen: list[str] = []
+    _stub_per_mode(monkeypatch, ms_by_mode, modes_seen)
+
+    result = timing.measure_baselines(lambda x: x, torch.zeros(2))
+
+    assert modes_seen == list(timing.COMPILE_BASELINE_MODES)
+    assert result["compile_ms"] == expected
+    assert result["compile_ms_by_mode"] == ms_by_mode
 
 
 def test_deterministic_flag_is_restored_after_timing(monkeypatch):
